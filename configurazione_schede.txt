@@ -1,0 +1,14 @@
+#PASTA_CORTA
+"Movimenti Pressa";"A";1
+"Movimenti Linea";"B";0
+"Sezionatore Pressa";"A1";1
+"Sezionatore Vent. Trabatto";"B2";0
+"Sezionatore Vent. TCM Incarto";"B3";0
+"Sezionatore Vent. TCM Essiccazione 1";"B5";0
+"Sezionatore Vent. TCM Essiccazione 2";"B6";0
+"Sezionatore Ventilazioni Raffreddatore";"B8";0
+
+#PASTA_LUNGA
+
+
+#SILO
