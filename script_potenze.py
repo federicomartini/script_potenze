@@ -930,20 +930,20 @@ def group_definitions(split_cfg: SectionSplitRules) -> list[dict]:
     return [entry for entry in defs if entry["bounds"] is not None]
 
 
-def infer_first_data_row_for_mr_totals(sheet) -> int:
-    """
-    Prima riga plausibile per dati M/R (dopo eventuali righe Totali inserite sopra i dati).
-    Evita di sommare righe 8-10 quando i dati effettivi iniziano dalla 11 (shift da insert_totals_rows).
-    """
+def find_first_mr_data_row(sheet) -> int:
+    """Prima riga dati impianto M/R (codice in A e/o valori in D/F), esclusi Totali e COMANDO VITE."""
     used_range = sheet.UsedRange
-    last_row = used_range.Row + used_range.Rows.Count - 1
-    if last_row < 8:
-        last_row = 8
-    for row in range(8, last_row + 1):
+    first_row = used_range.Row
+    last_row = first_row + used_range.Rows.Count - 1
+    start_scan = max(4, first_row)
+    for row in range(start_scan, last_row + 1):
         col_a = normalize_text(sheet.Cells(row, "A").Value)
         if col_a.startswith("TOTALE"):
             continue
         if row_is_comando_vite(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+            continue
+        d_cell = str(sheet.Cells(row, "D").Value or "").strip().upper()
+        if d_cell == "KW":
             continue
         if extract_three_digit_code(sheet.Cells(row, "A").Value) is not None:
             return row
@@ -954,6 +954,83 @@ def infer_first_data_row_for_mr_totals(sheet) -> int:
     return 8
 
 
+def strip_existing_mr_totals_block(sheet) -> None:
+    """Rimuove un blocco Totali+kW gia inserito sopra i dati (righe sopra la riga con 'kW' in D)."""
+    a4 = normalize_text(sheet.Range("A4").Value)
+    if not a4.startswith("TOTALE"):
+        return
+    ur = sheet.UsedRange
+    last = ur.Row + ur.Rows.Count - 1
+    kw_row: int | None = None
+    for r in range(4, min(last, ur.Row + 120) + 1):
+        if str(sheet.Cells(r, "D").Value or "").strip().lower() == "kw":
+            kw_row = r
+            break
+    if kw_row is None or kw_row <= 4:
+        return
+    sheet.Rows(f"4:{kw_row - 1}").Delete()
+
+
+def find_first_grand_data_row(sheet) -> int:
+    """Prima riga con contributo in D o F (fogli senza gruppi M/R)."""
+    used_range = sheet.UsedRange
+    last_row = used_range.Row + used_range.Rows.Count - 1
+    for row in range(4, last_row + 1):
+        col_a = normalize_text(sheet.Cells(row, "A").Value)
+        if col_a.startswith("TOTALE"):
+            continue
+        if row_is_comando_vite(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+            continue
+        raw_d = sheet.Cells(row, "D").Value
+        raw_f = sheet.Cells(row, "F").Value
+        d_blank = raw_d is None or str(raw_d).strip() == ""
+        f_blank = raw_f is None or str(raw_f).strip() == ""
+        if d_blank and f_blank:
+            continue
+        return row
+    return max(4, used_range.Row)
+
+
+def strip_existing_grand_totale_row(sheet) -> None:
+    """Rimuove una singola riga 'Totale' inserita in precedenza (solo cella A4 esattamente Totale)."""
+    if normalize_text(sheet.Range("A4").Value) != "TOTALE":
+        return
+    sheet.Rows("4").Delete()
+
+
+def insert_grand_total_row(sheet, *, number_format: str = "0.00") -> None:
+    """Una riga 'Totale' con somma D/F sopra il primo dato (fogli senza raggruppamento M/R)."""
+    strip_existing_grand_totale_row(sheet)
+    kw_g, amp_g = compute_sheet_grand_total(sheet)
+    fd = find_first_grand_data_row(sheet)
+    sheet.Rows(f"{fd}").Insert()
+    sheet.Cells(fd, "A").Value = "Totale"
+    sheet.Cells(fd, "D").Value = normalize_output_number(kw_g)
+    sheet.Cells(fd, "F").Value = normalize_output_number(amp_g)
+    sheet.Range(f"D{fd}").NumberFormat = number_format
+    sheet.Range(f"F{fd}").NumberFormat = number_format
+
+
+def remove_sheets_not_in_config(workbook, config_rows: list[ConfigRow]) -> None:
+    """Elimina dal workbook i fogli il cui nome non compare nella configurazione della linea scelta.
+    Il foglio V non viene mai rimosso (COMANDO VITE)."""
+    allowed = {str(c.sheet_name).strip().upper() for c in config_rows}
+    idx = workbook.Worksheets.Count
+    while idx >= 1:
+        ws = workbook.Worksheets(idx)
+        name_u = str(ws.Name).strip().upper()
+        if name_u == "V":
+            idx -= 1
+            continue
+        if name_u not in allowed:
+            log(f"[INFO] Rimosso foglio non in configurazione: {ws.Name}")
+            try:
+                ws.Delete()
+            except Exception as exc:
+                log(f"[WARN] Impossibile eliminare il foglio '{ws.Name}': {exc}")
+        idx -= 1
+
+
 def compute_totals_for_sheet(
     sheet,
     split_cfg: SectionSplitRules,
@@ -961,7 +1038,7 @@ def compute_totals_for_sheet(
     used_range = sheet.UsedRange
     first_row = used_range.Row
     last_row = first_row + used_range.Rows.Count - 1
-    first_data_row = infer_first_data_row_for_mr_totals(sheet)
+    first_data_row = find_first_mr_data_row(sheet)
     if last_row < first_data_row:
         last_row = first_data_row
 
@@ -1014,35 +1091,40 @@ def insert_totals_rows(
     *,
     number_format: str = "0.00",
 ) -> tuple[dict[str, dict[str, float]], list[UnmatchedRow]]:
-    split_label = split_cfg.split_label
-    has_existing_totals = normalize_text(sheet.Range("A4").Value).startswith("TOTALE")
-    expected_split_total = f"TOTALE {split_label}".upper()
-    has_existing_tag_totals = normalize_text(sheet.Range("A5").Value).startswith(expected_split_total)
-
-    if not (has_existing_totals and has_existing_tag_totals):
-        sheet.Rows("4:6").Insert()
-    sheet.Range("A4").Value = "Totale"
-    sheet.Range("A5").Value = f"Totale {split_label}"
-    sheet.Range("D7").Value = "kW"
-    sheet.Range("F7").Value = "A"
-
-    # Copia stile da una riga dati reale (dopo lo shift)
-    sheet.Rows(7).Copy()
-    sheet.Rows(4).PasteSpecial(XL_PASTE_FORMATS)
-    sheet.Rows(5).PasteSpecial(XL_PASTE_FORMATS)
-
+    """
+    Sopra la tabella dati: una riga Totale per ogni gruppo definito in group_definitions,
+    poi riga intestazione kW / A, poi i dati.
+    """
+    strip_existing_mr_totals_block(sheet)
     totals, unmatched_rows = compute_totals_for_sheet(sheet, split_cfg)
-    pressa = totals.get("pressa", {"kw": 0.0, "amp": 0.0})
-    secondario = totals.get("secondario", {"kw": 0.0, "amp": 0.0})
+    entries = group_definitions(split_cfg)
+    if not entries:
+        return totals, unmatched_rows
 
-    sheet.Range("D4").Value = normalize_output_number(pressa["kw"])
-    sheet.Range("F4").Value = normalize_output_number(pressa["amp"])
+    fd = find_first_mr_data_row(sheet)
+    n = len(entries)
+    sheet.Rows(f"{fd}:{fd + n}").Insert()
 
-    sheet.Range("D5").Value = normalize_output_number(secondario["kw"])
-    sheet.Range("F5").Value = normalize_output_number(secondario["amp"])
+    first_data_row = fd + n + 1
+    try:
+        sheet.Rows(first_data_row).Copy()
+        for offset in range(n + 1):
+            sheet.Rows(fd + offset).PasteSpecial(XL_PASTE_FORMATS)
+    except Exception:
+        pass
 
-    for addr in ("D4", "F4", "D5", "F5"):
-        sheet.Range(addr).NumberFormat = number_format
+    hdr_row = fd + n
+    for i, entry in enumerate(entries):
+        r = fd + i
+        tw = totals.get(entry["key"], {"kw": 0.0, "amp": 0.0})
+        sheet.Cells(r, "A").Value = f"Totale {entry['label']}"
+        sheet.Cells(r, "D").Value = normalize_output_number(tw["kw"])
+        sheet.Cells(r, "F").Value = normalize_output_number(tw["amp"])
+        sheet.Cells(r, "D").NumberFormat = number_format
+        sheet.Cells(r, "F").NumberFormat = number_format
+
+    sheet.Cells(hdr_row, "D").Value = "kW"
+    sheet.Cells(hdr_row, "F").Value = "A"
 
     return totals, unmatched_rows
 
@@ -1323,6 +1405,7 @@ def main() -> int:
                             )
                     else:
                         unmatched_rows = []
+                        insert_grand_total_row(sheet, number_format=excel_nf)
                         kw_g, amp_g = compute_sheet_grand_total(sheet)
                         title_u = first_map_title_for_sheet(display_cfg, cfg.sheet_name)
                         if not title_u:
@@ -1377,6 +1460,8 @@ def main() -> int:
                                 f"       - riga {item.row}: codice='{item.raw_code}', parsed={item.parsed_code}, "
                                 f"kW={item.kw:.2f}, A={item.amp:.2f}"
                             )
+
+                remove_sheets_not_in_config(wb_input, config_rows)
 
                 wb_input.Save()
                 log(f"[OK] File output input aggiornato: {output_input_path.name}")
