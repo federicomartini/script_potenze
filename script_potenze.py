@@ -323,14 +323,25 @@ def collect_comando_vite_rows(sheet) -> dict[int, tuple[float, float]]:
 
 
 def validate_vite_sheet(expected_n: int, found: dict[int, tuple[float, float]]) -> None:
-    """Verifica che ci siano esattamente N viti con numeri 1..N."""
-    need = set(range(1, expected_n + 1))
-    got = set(found.keys())
-    if len(found) != expected_n or got != need:
+    """
+    Fallisce se il foglio V non contiene esattamente `expected_n` viti, come da tipologia linea,
+    con COMANDO VITE 1 … COMANDO VITE expected_n (una riga per numero, nessun altro indice).
+    `expected_n` deriva dal nome tipologia (es. PASTA_LUNGA_4_VITI -> 4).
+    """
+    n_file = len(found)
+    if n_file != expected_n:
         raise RuntimeError(
-            f"Tipologia linea: previste {expected_n} viti (COMANDO VITE 1…{expected_n}). "
-            f"Nel foglio V risultano {len(found)} righe con numeri: {sorted(got)}. "
-            "Correggere il file di input."
+            f"Foglio V: servono esattamente {expected_n} viti (tipologia linea scelta), "
+            f"nel file risultano {n_file} righe COMANDO VITE numerate distinte. "
+            f"Numeri presenti: {sorted(found.keys())}."
+        )
+    required = set(range(1, expected_n + 1))
+    got = set(found.keys())
+    if got != required:
+        raise RuntimeError(
+            f"Foglio V: con {expected_n} viti i numeri COMANDO VITE devono essere esattamente "
+            f"da 1 a {expected_n} (una riga per ogni numero). "
+            f"Trovati invece: {sorted(got)}."
         )
 
 
@@ -371,7 +382,7 @@ def read_unified_line_config(config_path: Path, line_type_key: str) -> tuple[lis
     Contiene tutto cio che serve:
       - Impianto: @SPLIT_LABEL, @LABEL_*, @RANGE_*
       - Fogli da elaborare:
-          * se c'e almeno una @MAP_SHEET_GROUP -> solo i fogli citati nella MAP (ordine di prima apparizione);
+          * se c'e almeno una @MAP_SHEET_GROUP o @MAP_SHEET -> solo i fogli citati (ordine di prima apparizione);
           * altrimenti -> righe "Titolo";"NomeFoglio"
       - Smistamento: @OVERRIDE_*, @MAP_SHEET_GROUP, @PRIMARY_RANGE_SHEET, @SUMMARY_ROW*, ...
     """
@@ -430,6 +441,19 @@ def read_unified_line_config(config_path: Path, line_type_key: str) -> tuple[lis
                 )
                 continue
             sheet_group_labels[(sheet_name_raw.upper(), gkey_raw)] = title
+            sn_norm = sheet_name_raw.strip()
+            key_u = sn_norm.upper()
+            if key_u not in map_sheet_names_seen:
+                map_sheet_names_seen.add(key_u)
+                map_sheet_names_ordered.append(sn_norm)
+            continue
+
+        if line.startswith("@MAP_SHEET="):
+            payload = line[len("@MAP_SHEET=") :].strip()
+            sheet_name_raw = payload.split(";")[0].strip()
+            if not sheet_name_raw:
+                log(f"[WARN] @MAP_SHEET ignorata (nome foglio vuoto): {line}")
+                continue
             sn_norm = sheet_name_raw.strip()
             key_u = sn_norm.upper()
             if key_u not in map_sheet_names_seen:
@@ -554,7 +578,7 @@ def read_unified_line_config(config_path: Path, line_type_key: str) -> tuple[lis
     if map_sheet_names_ordered:
         if quoted_sheet_rows:
             log(
-                "[INFO] Sezione con @MAP_SHEET_GROUP: le righe \"...\";\"NomeFoglio\" "
+                "[INFO] Sezione con @MAP_SHEET_GROUP / @MAP_SHEET: le righe \"...\";\"NomeFoglio\" "
                 "non definiscono fogli extra (usa solo la MAP per l'elenco fogli)."
             )
         rows = [ConfigRow(sheet_name=s) for s in map_sheet_names_ordered]
@@ -619,8 +643,13 @@ def title_for_sheet_group(
     sn = sheet_name.strip().upper()
     mapped = display_cfg.sheet_group_labels.get((sn, group_key))
     if mapped:
-        return mapped
-    return summary_label_for_group(sheet_name, group_key, default_label, display_cfg)
+        title = mapped
+    else:
+        title = summary_label_for_group(sheet_name, group_key, default_label, display_cfg)
+    # Fogli tipo B1: titoli da gruppi sono "Movimenti ..." -> nello smistamento usare "Sezionatore ...".
+    if sheet_name_suffix_numeric_equals_one(sheet_name) and title.startswith("Movimenti "):
+        title = "Sezionatore " + title[len("Movimenti ") :]
+    return title
 
 
 def read_line_type_options(config_path: Path) -> list[LineTypeOption]:
@@ -675,12 +704,46 @@ def choose_section(config_path: Path) -> LineTypeOption:
         log(f"  {idx}) {option.label}")
 
     valid_choices = "/".join(str(i) for i in range(1, len(options) + 1))
+    n = len(options)
     choice = input(f"Scelta [{valid_choices}]: ").strip()
+    if not choice:
+        raise ValueError(
+            f"Scelta non valida: nessun valore inserito. "
+            f"Digita un numero intero da 1 a {n} per la tipologia linea."
+        )
     try:
-        selected = options[int(choice) - 1]
-    except (ValueError, IndexError):
-        raise ValueError("Scelta non valida.")
-    return selected
+        idx = int(choice)
+    except ValueError:
+        raise ValueError(
+            f"Scelta non valida: «{choice}» non e' un numero intero. "
+            f"Usa un valore da 1 a {n}."
+        )
+    if idx < 1 or idx > n:
+        raise ValueError(
+            f"Scelta non valida: {idx} e' fuori intervallo. "
+            f"Sono definite solo le opzioni da 1 a {n}."
+        )
+    return options[idx - 1]
+
+
+def excel_two_decimal_format(decimal_separator: str) -> str:
+    """Pattern formato Excel per due decimali visibili (`decimal_separator` = '.' o ',')."""
+    return "0,00" if decimal_separator == "," else "0.00"
+
+
+def choose_decimal_separator() -> str:
+    log("Separatore decimale nei file Excel generati (solo visualizzazione):")
+    log("  1) Punto (.)")
+    log("  2) Virgola (,)")
+    choice = input("Scelta [1/2]: ").strip()
+    if choice == "2":
+        return ","
+    if choice == "1" or choice == "":
+        return "."
+    raise ValueError(
+        f"Scelta non valida: «{choice}» non e' ammesso per il separatore decimale. "
+        "Digita 1 (punto), 2 (virgola) oppure Invio per usare il punto."
+    )
 
 
 def find_input_workbook(base_dir: Path) -> Path:
@@ -731,19 +794,42 @@ def get_sheet(workbook, name: str):
 _SHEET_LETTERS_THEN_DIGITS_RE = re.compile(r"^([A-Za-z]+)(\d+)$")
 
 
-def sheet_uses_range_grouping(sheet_name: str) -> bool:
-    """
-    True -> insert_totals_rows sul foglio Excel + smistamento da gruppi M/R (eventuale filtro MAP).
+def sheet_name_suffix_numeric_equals_one(sheet_name: str) -> bool:
+    """True se il nome e' <Lettere><cifre> e la parte numerica e' esattamente 1 (es. B1, AA1; no B11)."""
+    m = _SHEET_LETTERS_THEN_DIGITS_RE.fullmatch(sheet_name.strip())
+    return bool(m and int(m.group(2)) == 1)
 
-    False per nome <Lettere><numero> con numero > 1 (es. B2, C4): non si applicano mai i gruppi/range M/R;
-    una riga smistamento con somma delle colonne D e F sul UsedRange (titolo dal primo @MAP_SHEET_GROUP).
+
+def sheet_is_multi_group_mr_name(sheet_name: str) -> bool:
+    """
+    Fogli dove tutti i gruppi definiti dai range M/R vanno sempre considerati (nessun filtro su @MAP_SHEET_GROUP):
+    - nome con sole lettere (es. A, B, V, TR);
+    - nome <Lettere><cifre> con parte numerica ESATTAMENTE 1 (es. B1, AA1).
+    Esclusi suffissi diversi da 1 (es. B2, B11, C9): li si tratta come fogli 'numerati' a parte.
     """
     s = sheet_name.strip()
     if re.fullmatch(r"[A-Za-z]+", s):
         return True
     m = _SHEET_LETTERS_THEN_DIGITS_RE.fullmatch(s)
     if m:
-        return int(m.group(2)) <= 1
+        return int(m.group(2)) == 1
+    return False
+
+
+def sheet_uses_range_grouping(sheet_name: str) -> bool:
+    """
+    True -> insert_totals_rows sul foglio Excel + smistamento da gruppi M/R (eventuale filtro MAP).
+
+    False per nome <Lettere><numero> con numero diverso da 1 (es. B2, B11): somma D/F senza split range;
+    titolo smistamento dal primo @MAP_SHEET_GROUP se presente.
+    Altri nomi (non matching Lettere+Cifre) restano True come prima.
+    """
+    s = sheet_name.strip()
+    if re.fullmatch(r"[A-Za-z]+", s):
+        return True
+    m = _SHEET_LETTERS_THEN_DIGITS_RE.fullmatch(s)
+    if m:
+        return int(m.group(2)) == 1
     return True
 
 
@@ -786,15 +872,14 @@ def first_map_title_for_sheet(display_cfg: LineDisplayConfig, sheet_name: str) -
 
 def map_group_keys_for_sheet(display_cfg: LineDisplayConfig, sheet_name: str) -> set[str] | None:
     """
-    Per fogli il cui nome e' solo lettere (es. B, V): None -> si emettono tutti i gruppi con totale
-    non zero; @MAP_SHEET_GROUP serve solo ai titoli (title_for_sheet_group), non a limitare le righe.
+    None -> smistamento elenca tutti i gruppi con totale non zero (classificazione dai @RANGE_*).
+    @MAP_SHEET_GROUP resta solo per titoli custom (title_for_sheet_group), non per limitare i gruppi,
+    su fogli solo-lettera e su fogli <Lettere>1 (es. A, B, B1; esclusi B11, B2).
 
-    Per fogli con suffisso numerico nel nome (es. B1): se esiste @MAP_SHEET_GROUP per quel foglio,
-    restituisce i soli group_key da elencare (es. B1 -> solo pressa). Se non c'e MAP per quel nome ->
-    None (tutti i gruppi non zero).
+    Per gli altri nomi foglio (es. C3): se esiste MAP per quel nome, si filtra ai soli group_key indicati;
+    se non c'e MAP -> None (tutti i gruppi non zero).
     """
-    raw = sheet_name.strip()
-    if re.fullmatch(r"[A-Za-z]+", raw):
+    if sheet_is_multi_group_mr_name(sheet_name):
         return None
 
     sn = sheet_name.strip().upper()
@@ -926,6 +1011,8 @@ def compute_totals_for_sheet(
 def insert_totals_rows(
     sheet,
     split_cfg: SectionSplitRules,
+    *,
+    number_format: str = "0.00",
 ) -> tuple[dict[str, dict[str, float]], list[UnmatchedRow]]:
     split_label = split_cfg.split_label
     has_existing_totals = normalize_text(sheet.Range("A4").Value).startswith("TOTALE")
@@ -954,6 +1041,9 @@ def insert_totals_rows(
     sheet.Range("D5").Value = normalize_output_number(secondario["kw"])
     sheet.Range("F5").Value = normalize_output_number(secondario["amp"])
 
+    for addr in ("D4", "F4", "D5", "F5"):
+        sheet.Range(addr).NumberFormat = number_format
+
     return totals, unmatched_rows
 
 
@@ -962,6 +1052,8 @@ def create_summary_file(
     output_path: Path,
     summary_rows: list[dict],
     vite_rows: list[dict] | None = None,
+    *,
+    number_format: str = "0.00",
 ) -> None:
     wb = excel_app.Workbooks.Add()
     try:
@@ -978,12 +1070,8 @@ def create_summary_file(
             for col in range(1, 7):
                 ws.Cells(row, col).Value = None
 
-        # Imposta larghezze colonne principali.
-        ws.Columns("A").ColumnWidth = 37.0
-        ws.Columns("B").ColumnWidth = 6.71
-        ws.Columns("C").ColumnWidth = 7.43
+        # Colonne D/F larghezze guida; A,B,C,E si adattano al contenuto a fine elaborazione.
         ws.Columns("D").ColumnWidth = 4.71
-        ws.Columns("E").ColumnWidth = 4.57
         ws.Columns("F").ColumnWidth = 28.29
 
         # Font richiesto
@@ -996,10 +1084,11 @@ def create_summary_file(
 
         # Righe 3 e 4 vuote (già pulite)
 
-        # Riga 5: intestazioni tabella
+        # Riga 5: intestazioni tabella (nome foglio originale in colonna E)
         ws.Cells(5, 2).Value = "kW"
         ws.Cells(5, 3).Value = "A"
-        ws.Cells(5, 4).Value = "sez."
+        ws.Cells(5, 5).Value = "Rif."
+        ws.Range("A5:F5").Font.Bold = True
 
         # Righe 5-6: griglia intestazione
         for row in (5, 6):
@@ -1015,8 +1104,8 @@ def create_summary_file(
                 ws.Cells(r, 1).Value = item["title"]
                 ws.Cells(r, 2).Value = normalize_output_number(item["kw"])
                 ws.Cells(r, 3).Value = normalize_output_number(item["amp"])
-                ws.Cells(r, 4).Value = item["rif"]
-                ws.Cells(r, 5).Value = ""
+                ws.Cells(r, 4).Value = ""
+                ws.Cells(r, 5).Value = item["rif"]
                 ws.Cells(r, 6).Value = ""
                 vite_last_row = r
                 r += 1
@@ -1059,12 +1148,12 @@ def create_summary_file(
             ws.Cells(row, 1).Value = title
             ws.Cells(row, 2).Value = normalize_output_number(kw)
             ws.Cells(row, 3).Value = normalize_output_number(amp)
-            ws.Cells(row, 4).Value = rif  # RIF = nome foglio
-            ws.Cells(row, 5).Value = ""
+            ws.Cells(row, 4).Value = ""
+            ws.Cells(row, 5).Value = rif  # nome foglio Excel originale
             ws.Cells(row, 6).Value = ""
 
             if is_tag:
-                ws.Range(ws.Cells(row, 1), ws.Cells(row, 4)).Font.Color = 255  # rosso
+                ws.Range(ws.Cells(row, 1), ws.Cells(row, 5)).Font.Color = 255  # rosso
 
             written_rows.append({"row": row, "group_key": group_key})
             prev_title = title
@@ -1102,6 +1191,9 @@ def create_summary_file(
         ws.Range(ws.Cells(total_row, 1), ws.Cells(total_row, 6)).Borders.LineStyle = XL_CONTINUOUS
         ws.Range(ws.Cells(total_row, 1), ws.Cells(total_row, 6)).Borders.Weight = XL_MEDIUM
 
+        # kW e A: sempre 2 decimali visibili
+        ws.Range(ws.Cells(7, 2), ws.Cells(total_row, 3)).NumberFormat = number_format
+
         # Bordo destro colonna F dalla riga 1 fino a due righe sotto il totale.
         end_row = total_row + 2
         fcol = ws.Range(ws.Cells(1, 6), ws.Cells(end_row, 6))
@@ -1113,11 +1205,9 @@ def create_summary_file(
         bottom_line.Borders(XL_EDGE_BOTTOM).LineStyle = XL_CONTINUOUS
         bottom_line.Borders(XL_EDGE_BOTTOM).Weight = XL_MEDIUM
 
-        # Richiesta utente: colonna A sufficientemente larga per mostrare tutto
-        # il testo (righe dalla 6 in avanti).
-        ws.Columns("A").AutoFit()
-        if ws.Columns("A").ColumnWidth < 37:
-            ws.Columns("A").ColumnWidth = 37
+        # Colonne A, B, C, E adattate al contenuto.
+        for _col in ("A", "B", "C", "E"):
+            ws.Columns(_col).AutoFit()
 
         # Regola richiesta: nessuna cella con sfondo colorato nel file di output.
         used = ws.UsedRange
@@ -1146,6 +1236,8 @@ def main() -> int:
 
     try:
         selected_line_type = choose_section(config_path)
+        decimal_sep = choose_decimal_separator()
+        excel_nf = excel_two_decimal_format(decimal_sep)
         config_rows, split_cfg, display_cfg = read_unified_line_config(config_path, selected_line_type.key)
         if not config_rows:
             raise RuntimeError(
@@ -1165,6 +1257,7 @@ def main() -> int:
         log(f"Creo copia output input: {output_input_path.name}")
         log(f"Tipologia linea: {selected_line_type.label} ({selected_line_type.key})")
         log(f"Profilo configurazione: #LINE_DISPLAY_{selected_line_type.key}")
+        log(f"Decimali Excel: {'virgola (,)' if decimal_sep == ',' else 'punto (.)'}")
 
         pythoncom.CoInitialize()
         excel = win32.DispatchEx("Excel.Application")
@@ -1176,12 +1269,23 @@ def main() -> int:
         try:
             wb_input = excel.Workbooks.Open(str(output_input_path))
             try:
-                for cfg in config_rows:
-                    if cfg.sheet_name.strip().lower() == "v":
-                        log(
-                            "[INFO] Foglio V: i dati per lo smistamento vengono letti a fine elaborazione, "
-                            "in base al numero di viti della tipologia linea scelta."
+                expected_vite_n = expected_vite_count_for_line_type(selected_line_type.key)
+                if expected_vite_n is not None:
+                    v_sheet = get_sheet(wb_input, "V")
+                    if v_sheet is None:
+                        raise RuntimeError(
+                            f"Tipologia «{selected_line_type.label}»: è obbligatorio il foglio V con "
+                            f"{expected_vite_n} righe COMANDO VITE (numeri da 1 a {expected_vite_n}). "
+                            "Foglio V assente nel file."
                         )
+                    found_vite = collect_comando_vite_rows(v_sheet)
+                    validate_vite_sheet(expected_vite_n, found_vite)
+                    vite_summary_rows = vite_dict_to_summary_rows(found_vite)
+                    log(f"[OK] Foglio V: {expected_vite_n} COMANDO VITE verificati.")
+
+                for cfg in config_rows:
+                    log(f"[INFO] Elaboro foglio '{cfg.sheet_name}'...")
+                    if cfg.sheet_name.strip().lower() == "v":
                         continue
 
                     sheet = get_sheet(wb_input, cfg.sheet_name)
@@ -1189,12 +1293,13 @@ def main() -> int:
                         log(f"[INFO] Foglio '{cfg.sheet_name}' non presente: salto.")
                         continue
 
-                    log(f"[INFO] Elaboro foglio '{cfg.sheet_name}'...")
                     use_groups = sheet_uses_range_grouping(cfg.sheet_name)
                     unmatched_rows: list[UnmatchedRow] = []
 
                     if use_groups:
-                        totals_by_group, unmatched_rows = insert_totals_rows(sheet, split_cfg)
+                        totals_by_group, unmatched_rows = insert_totals_rows(
+                            sheet, split_cfg, number_format=excel_nf
+                        )
 
                         map_only_groups = map_group_keys_for_sheet(display_cfg, cfg.sheet_name)
                         for entry in group_definitions(split_cfg):
@@ -1218,17 +1323,13 @@ def main() -> int:
                             )
                     else:
                         unmatched_rows = []
-                        log(
-                            f"[INFO] Foglio '{cfg.sheet_name}': suffisso numerico > 1 -> "
-                            "nessun raggruppamento M/R; somma colonne D e F sul UsedRange; titolo da MAP."
-                        )
                         kw_g, amp_g = compute_sheet_grand_total(sheet)
                         title_u = first_map_title_for_sheet(display_cfg, cfg.sheet_name)
                         if not title_u:
                             title_u = cfg.sheet_name
                             log(
-                                f"[WARN] Foglio '{cfg.sheet_name}' senza @MAP_SHEET_GROUP: "
-                                "titolo smistamento = nome foglio."
+                                f"[WARN] Foglio '{cfg.sheet_name}': nessun titolo in MAP; "
+                                "smistamento usa il nome foglio."
                             )
                         summary_rows.append(
                             {
@@ -1277,31 +1378,18 @@ def main() -> int:
                                 f"kW={item.kw:.2f}, A={item.amp:.2f}"
                             )
 
-                expected_vite_n = expected_vite_count_for_line_type(selected_line_type.key)
-                vite_summary_rows = []
-                if expected_vite_n is not None:
-                    v_sheet = get_sheet(wb_input, "V")
-                    if v_sheet is None:
-                        raise RuntimeError(
-                            f"Tipologia «{selected_line_type.label}»: è obbligatorio il foglio V con "
-                            f"{expected_vite_n} righe COMANDO VITE (numeri da 1 a {expected_vite_n}). "
-                            "Foglio V assente nel file."
-                        )
-                    found_vite = collect_comando_vite_rows(v_sheet)
-                    validate_vite_sheet(expected_vite_n, found_vite)
-                    vite_summary_rows = vite_dict_to_summary_rows(found_vite)
-                    log(
-                        f"[OK] Foglio V: {expected_vite_n} viti -> smistamento righe "
-                        f"{_SMISTAMENTO_VITE_START_ROW}-{_SMISTAMENTO_VITE_START_ROW + expected_vite_n - 1} "
-                        '(etichette "Motore vite x").'
-                    )
-
                 wb_input.Save()
                 log(f"[OK] File output input aggiornato: {output_input_path.name}")
             finally:
                 wb_input.Close(SaveChanges=False)
 
-            create_summary_file(excel, output_summary_path, summary_rows, vite_rows=vite_summary_rows)
+            create_summary_file(
+                excel,
+                output_summary_path,
+                summary_rows,
+                vite_rows=vite_summary_rows,
+                number_format=excel_nf,
+            )
             log(f"[OK] File smistamento generato: {output_summary_path.name}")
         finally:
             excel.CutCopyMode = False

@@ -13,8 +13,9 @@
 @RANGE_MOVIMENTI_LINEA=450-860
 @RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
 @OVERRIDE_SECONDARIO=Movimenti Stenditrice
-@MAP_SHEET_GROUP=B;pressa;Movimenti Pressa
-@MAP_SHEET_GROUP=B1;pressa;Sezionatore Pressa
+# Ordine fogli: @MAP_SHEET senza gruppo (classificazione dai RANGE). Solo suffisso >1: @MAP_SHEET_GROUP.
+@MAP_SHEET=B
+@MAP_SHEET=B1
 @MAP_SHEET_GROUP=B2;secondario;Sezionatore Stenditrice
 @MAP_SHEET_GROUP=C3;movimenti_linea;Sezionatore Vent. Incarto 1
 @MAP_SHEET_GROUP=C4;movimenti_linea;Sezionatore Vent. Incarto 2
@@ -31,14 +32,17 @@
 @RANGE_RECUPERO_POLVERI=NONE
 @RANGE_MOVIMENTI_LINEA=450-860
 @RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
-"Movimenti Pressa";"A"
-"Movimenti Linea";"B"
-"Sezionatore Pressa";"A1"
-"Sezionatore Vent. Trabatto";"B2"
-"Sezionatore Vent. TCM Incarto";"B3"
-"Sezionatore Vent. TCM Essiccazione 1";"B5"
-"Sezionatore Vent. TCM Essiccazione 2";"B6"
-"Sezionatore Ventilazioni Raffreddatore";"B8"
+@OVERRIDE_SECONDARIO=Movimenti Stenditrice
+@MAP_SHEET=B
+@MAP_SHEET=B1
+@MAP_SHEET_GROUP=B2;secondario;Sezionatore Stenditrice
+@MAP_SHEET_GROUP=C3;movimenti_linea;Sezionatore Vent. Incarto 1
+@MAP_SHEET_GROUP=C4;movimenti_linea;Sezionatore Vent. Incarto 2
+@MAP_SHEET_GROUP=C5;movimenti_linea;Sezionatore Vent. Incarto 3
+@MAP_SHEET_GROUP=C6;movimenti_linea;Sezionatore Vent. GPL 1
+@MAP_SHEET_GROUP=C7;movimenti_linea;Sezionatore Vent. GPL 2
+@MAP_SHEET_GROUP=C8;movimenti_linea;Sezionatore Vent. Umidificatore
+@MAP_SHEET_GROUP=C9;movimenti_linea;Sezionatore Vent. Raffreddatore
 
 #LINE_DISPLAY_PASTA_CORTA_2_VITI
 @SPLIT_LABEL=Tagliapasta
@@ -48,11 +52,9 @@
 @RANGE_MOVIMENTI_LINEA=450-860
 @RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
 @OVERRIDE_SECONDARIO=Movimenti Tagliapasta
-@MAP_SHEET_GROUP=A;pressa;Movimenti Pressa
-@MAP_SHEET_GROUP=B;movimenti_linea;Movimenti Linea
-@MAP_SHEET_GROUP=A1;pressa;Movimenti Pressa
-@MAP_SHEET_GROUP=A1;secondario;Movimenti Tagliapasta
-@MAP_SHEET_GROUP=B1;pressa;Sezionatore Pressa
+@MAP_SHEET=A
+@MAP_SHEET=B
+@MAP_SHEET=A1
 @MAP_SHEET_GROUP=B2;movimenti_linea;Sezionatore Vent. Trabatto
 @MAP_SHEET_GROUP=B3;movimenti_linea;Sezionatore Vent. TCM Incarto
 @MAP_SHEET_GROUP=B5;movimenti_linea;Sezionatore Vent. TCM Essiccazione 1
