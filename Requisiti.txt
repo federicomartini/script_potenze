@@ -1,34 +1,51 @@
 0. Fare uno script che deve essere lanciato nella stessa cartella del file .xlsx che avrà un formato simile (ma non sempre identico) al file di esempio che abbiamo ora "353880 TBGX.xlsx"
 1. Se c'è il file, Chiedere all'utente se si tratta di una Pasta Corta, Pasta Lunga o Silo, altrimenti dare un messaggio a log nella shell all'utente (e fare in modo che l'utente possa leggerlo prima che la shell si chiuda)
 2. Individuare la sezione giusta del file configurazione_schede.txt. Ad esempio, se l'utente sceglie Pasta Corta, leggere le righe sotto a #PASTA_CORTA e prima del successivo titolo della prossima sezione (che sarebbe #PASTA_LUNGA)
-3. Per ogni riga del file di configurazione, si ha la seguente struttura "<titolo>";"<nome_foglio>";<is_split_tagliapasta>
+3. Per ogni riga del file di configurazione, la struttura è: "<titolo>";"<nome_foglio>"
+   Nella sezione possono essere presenti anche direttive:
+   - @SPLIT_LABEL=<nome_gruppo_secondario>  (es. Tagliapasta, Stenditrice, Cuocitore)
+   - @RANGE_PRESSA=<start-stop>             (es. 165-350)
+   - @RANGE_FORMATRICE=<start-stop>         (es. 351-449)
 4. Obiettivo: Creare un foglio xlsx con la stessa identica struttura del foglio "353880 - Smistamento potenza.xls" (questo foglio non sarà sempre presente, ma lo abbiamo adesso per implementare nel codice questa struttura e poterla replicare quando si crea il file)
 5. Per ogni riga letta nel file configurazione_schede.txt in base al tipo di scelta fatta dall'utente, fare quanto segue:
 	- Se <nome_foglio> esiste nel xlsx di input:
-		- Aggiungere tre righe dopo la riga 3 e scrivere in A4 "Totale" e in A5 "Totale Tagliapasta"
-			- Se il parametro <is_split_tagliapasta> è 0
-				- Fare la somma matematica dei valori numerici della colonna D (rimuovere "kW" per fare il calcolo numerico)
-					- Scrivere la somma nella cella D4
-				- Fare la somma matematica dei valori numerici della colonna F (rimuovere "A" per fare il calcolo numerico)
-					- Scrivere la somma nella cella F4
-			- Se il parametro <is_split_tagliapasta> è 1
-				- Fare la somma matematica dei valori numerici della colonna D che NON hanno la parola "TAGLIAPASTA" nella colonna C (rimuovere "kW" per fare il calcolo numerico)
-					- Scrivere la somma nella cella D4
-				- Fare la somma matematica dei valori numerici della colonna D che hanno la parola "TAGLIAPASTA" nella colonna C (rimuovere "kW" per fare il calcolo numerico)
-					- Scrivere la somma nella cella D5
-				- Fare la somma matematica dei valori numerici della colonna F che NON hanno la parola "TAGLIAPASTA" nella colonna C (rimuovere "A" per fare il calcolo numerico)
-					- Scrivere la somma nella cella F4
-				- Fare la somma matematica dei valori numerici della colonna F che hanno la parola "TAGLIAPASTA" nella colonna C (rimuovere "A" per fare il calcolo numerico)
-					- Scrivere la somma nella cella F5
+		- Aggiungere tre righe dopo la riga 3 e scrivere in A4 "Totale" e in A5 "Totale <SPLIT_LABEL>"
+		- Fare la somma matematica dei valori numerici in D/F separando i gruppi tramite CODICE in colonna A:
+			- Colonna A formattata come <lettera><codice_tre_cifre><codice_una_cifra> (es. M3651, R4151)
+			- Considerare solo prefissi M e R
+			- Se il codice è nel range @RANGE_PRESSA -> gruppo Pressa (o "Movimenti Impastatrici" per Cous Cous)
+			- Se il codice è nel range @RANGE_SECONDARY -> gruppo secondario (SPLIT_LABEL)
+		- Scrivere:
+			- D4/F4 = totale gruppo Pressa
+			- D5/F5 = totale gruppo secondario
 		- A partire dalla riga 11 del foglio xlsx di output, scrivere:
 			- Colonna A: <titolo>
 			- Colonna B: somma matematica dei kW (senza unità di misura e con separatore decimale il .)
 			- Colonna C: somma mateimatica degli A (senza unità di misura e con separatore decimale il .)
-			- Se la riga ha <is_split_tagliapasta> uguale a 1, scrivere anche la riga sotto in cui nella colonna A scrivi il <titolo> sostituendo "Pressa" con "Tagliapasta" e inserisci i relativi totali nelle colonna B e C
+			- Se il totale gruppo secondario è > 0, scrivere anche la riga sotto in cui nella colonna A il titolo sostituisce "Pressa" con <SPLIT_LABEL> e inserisce i totali in B e C
 			- Passare alla riga successiva una volta fatto.
 6. I file excel DEVONO essere con lo stesso stile di quelli che stiamo usando come esempio, ovvero "353880 TBGX.xlsx" e "353880 - Smistamento potenza.xls". L'unica differenza per "353880 - Smistamento potenza.xls" è che potrebbe avere più o meno righe a seconda di quante righe vengono gestite come da configurazione_schede.txt
-7. Se l'utente sceglie una PASTA LUNGA, ci saranno Totale e "Totale Stenditrice" da calcolare (invece di Totale Tagliapasta), mentre nello Smistamento Potenze di Output devi appendere la parola "Stenditrice" invece di "Tagliapasta" e le parole che differenziano il totale (come fatto per la PASTA CORTA con "Tagliapasta") sono da cercare solo nel foglio "B" e sono:
-	- STENDITRICE
-	- PAREGGIATORE
-	- TRITURATORE
-	
+7. Le prime righe dalla 7 alla 10 devono essere compilate con le indicazioni del foglio "V" (o "TR" solo per le linee Cous Cous). Nel caso di foglio "V", le viti possono essere da 1 a 4 e sono sempre presenti in ordine dalla 1 alla 4. Nel file di smistamento potenze devono avere descrizione tipo "Motore vite 1" dove il numero deve essere congruente al numero relativo alla riga nel foglio. Nel caso delle cous cous, sono sempre nell'ordine "Trituratore Prodotto Fine" e sotto "Trituratore Prodotto Grosso"
+8. Le tipologie di linee possono essere (tienine conto nel file di configurazione_schede):
+	- Pasta Lunga
+	- Pasta Corta
+	- GM
+	- CTA
+	- Cous Cous
+9. Regole di raggruppamento a range (estremi inclusi), da gestire tramite configurazione:
+   - [165;350] -> gruppo Pressa per tutte le linee
+     (per Cous Cous il nome gruppo è "Movimenti Impastatrici")
+   - Solo Cous Cous: [191;199] -> gruppo "Movimenti Recupero Polveri"
+     (questo sottogruppo NON va in Pressa/Impastatrici)
+   - [351;449] -> gruppo secondario per linee NON Cous Cous:
+     - Pasta Lunga -> Stenditrice
+     - Pasta Corta -> Tagliapasta
+     - GM -> Matassatrice
+     - CTA -> Niditrice
+   - Solo Cous Cous: al posto della regola precedente usare [415;449] -> "Cuocitore"
+   - [450;860] -> gruppo "Movimenti Linea" per tutte le linee
+   - Solo Cous Cous: [861;1000] -> gruppo "Movimenti selezione prodotto e sili"
+
+10. Tutti i nomi gruppi e i range devono essere chiaramente modificabili nel file configurazione_schede.txt.
+
+11. Solo i fogli che si chiamano <Lettere> e <Lettera>1 sono da gestire con i raggruppamenti. Se invece c'è <Lettera><numero> con <numero> maggiore di 1, allora ignoro i raggruppamenti e uso solo il nome assegnato da file di configurazione

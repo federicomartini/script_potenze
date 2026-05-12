@@ -1,14 +1,73 @@
-#PASTA_CORTA
-"Movimenti Pressa";"A";1
-"Movimenti Linea";"B";0
-"Sezionatore Pressa";"A1";1
-"Sezionatore Vent. Trabatto";"B2";0
-"Sezionatore Vent. TCM Incarto";"B3";0
-"Sezionatore Vent. TCM Essiccazione 1";"B5";0
-"Sezionatore Vent. TCM Essiccazione 2";"B6";0
-"Sezionatore Ventilazioni Raffreddatore";"B8";0
+#LINE_TYPES
+"PASTA_LUNGA_4_VITI";"Pasta Lunga 4 Viti"
+"PASTA_LUNGA_2_VITI";"Pasta Lunga 2 Viti"
+"PASTA_CORTA_2_VITI";"Pasta Corta 2 Viti"
+"CTA";"CTA"
 
-#PASTA_LUNGA
+#LINE_DISPLAY_PASTA_LUNGA_4_VITI
+# Tutto il profilo Pasta Lunga 4 viti (range, fogli Excel, titoli smistamento).
+@SPLIT_LABEL=Stenditrice
+@RANGE_PRESSA=165-350
+@RANGE_FORMATRICE=351-449
+@RANGE_RECUPERO_POLVERI=NONE
+@RANGE_MOVIMENTI_LINEA=450-860
+@RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
+@OVERRIDE_SECONDARIO=Movimenti Stenditrice
+@MAP_SHEET_GROUP=B;pressa;Movimenti Pressa
+@MAP_SHEET_GROUP=B1;pressa;Sezionatore Pressa
+@MAP_SHEET_GROUP=B2;secondario;Sezionatore Stenditrice
+@MAP_SHEET_GROUP=C3;movimenti_linea;Sezionatore Vent. Incarto 1
+@MAP_SHEET_GROUP=C4;movimenti_linea;Sezionatore Vent. Incarto 2
+@MAP_SHEET_GROUP=C5;movimenti_linea;Sezionatore Vent. Incarto 3
+@MAP_SHEET_GROUP=C6;movimenti_linea;Sezionatore Vent. GPL 1
+@MAP_SHEET_GROUP=C7;movimenti_linea;Sezionatore Vent. GPL 2
+@MAP_SHEET_GROUP=C8;movimenti_linea;Sezionatore Vent. Umidificatore
+@MAP_SHEET_GROUP=C9;movimenti_linea;Sezionatore Vent. Raffreddatore
 
+#LINE_DISPLAY_PASTA_LUNGA_2_VITI
+@SPLIT_LABEL=Stenditrice
+@RANGE_PRESSA=165-350
+@RANGE_FORMATRICE=351-449
+@RANGE_RECUPERO_POLVERI=NONE
+@RANGE_MOVIMENTI_LINEA=450-860
+@RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
+"Movimenti Pressa";"A"
+"Movimenti Linea";"B"
+"Sezionatore Pressa";"A1"
+"Sezionatore Vent. Trabatto";"B2"
+"Sezionatore Vent. TCM Incarto";"B3"
+"Sezionatore Vent. TCM Essiccazione 1";"B5"
+"Sezionatore Vent. TCM Essiccazione 2";"B6"
+"Sezionatore Ventilazioni Raffreddatore";"B8"
 
-#SILO
+#LINE_DISPLAY_PASTA_CORTA_2_VITI
+@SPLIT_LABEL=Tagliapasta
+@RANGE_PRESSA=165-350
+@RANGE_FORMATRICE=351-449
+@RANGE_RECUPERO_POLVERI=NONE
+@RANGE_MOVIMENTI_LINEA=450-860
+@RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
+"Movimenti Pressa";"A"
+"Movimenti Linea";"B"
+"Sezionatore Pressa";"A1"
+"Sezionatore Vent. Trabatto";"B2"
+"Sezionatore Vent. TCM Incarto";"B3"
+"Sezionatore Vent. TCM Essiccazione 1";"B5"
+"Sezionatore Vent. TCM Essiccazione 2";"B6"
+"Sezionatore Ventilazioni Raffreddatore";"B8"
+
+#LINE_DISPLAY_CTA
+@SPLIT_LABEL=Niditrice
+@RANGE_PRESSA=165-350
+@RANGE_FORMATRICE=351-449
+@RANGE_RECUPERO_POLVERI=NONE
+@RANGE_MOVIMENTI_LINEA=450-860
+@RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
+"Movimenti Pressa";"A"
+"Movimenti Linea";"B"
+"Sezionatore Pressa";"A1"
+"Sezionatore Vent. Trabatto";"B2"
+"Sezionatore Vent. TCM Incarto";"B3"
+"Sezionatore Vent. TCM Essiccazione 1";"B5"
+"Sezionatore Vent. TCM Essiccazione 2";"B6"
+"Sezionatore Ventilazioni Raffreddatore";"B8"
