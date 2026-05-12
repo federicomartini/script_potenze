@@ -12,9 +12,9 @@ import win32com.client as win32
 
 CONFIG_FILE_NAME = "configurazione_schede.txt"
 
-# Foglio "V": righe con testo tipo "COMANDO VITE 1" in colonna A (case insensitive).
+# Foglio "V": testo tipo "COMANDO VITE 1" in colonna A oppure B (case insensitive).
 _COMANDO_VITE_RE = re.compile(r"COMANDO\s+VITE\s*(\d+)", re.IGNORECASE)
-_MAX_VITE_ROWS_SMISTAMENTO = 4
+_LINE_TYPE_VITE_COUNT_RE = re.compile(r"_(\d+)_VITI$")
 _SMISTAMENTO_VITE_START_ROW = 7
 _SMISTAMENTO_MAIN_TABLE_ROW = 11
 
@@ -259,15 +259,37 @@ def parse_excel_cell_ref(ref: str) -> tuple[int, int]:
     return row, col
 
 
-def row_is_comando_vite(col_a_value: object) -> bool:
-    text = str(col_a_value or "").strip()
-    return bool(_COMANDO_VITE_RE.search(text))
+def row_is_comando_vite(col_a_value: object, col_b_value: object | None = None) -> bool:
+    """True se COMANDO VITE x e in colonna A oppure in colonna B."""
+    if _COMANDO_VITE_RE.search(str(col_a_value or "").strip()):
+        return True
+    if col_b_value is not None and _COMANDO_VITE_RE.search(str(col_b_value or "").strip()):
+        return True
+    return False
 
 
-def extract_comando_vite_summary_rows(sheet) -> list[dict]:
+def line_type_is_cous_cous(line_key: str) -> bool:
+    """Linee Cous Cous: foglio TR, non il modello COMANDO VITE su V."""
+    k = line_key.strip().upper()
+    return "COUS_COU" in k or k.startswith("COUS_COUS")
+
+
+def expected_vite_count_for_line_type(line_key: str) -> int | None:
     """
-    Cerca righe con 'COMANDO VITE x' in colonna A; kW e A da col. D e F.
-    Ordina per x; massimo _MAX_VITE_ROWS_SMISTAMENTO righe (slot righe 7-10 nello smistamento).
+    Numero viti atteso dal nome tipologia (es. PASTA_LUNGA_4_VITI -> 4).
+    None per CTA, Cous Cous, ecc.
+    """
+    if line_type_is_cous_cous(line_key):
+        return None
+    k = line_key.strip().upper()
+    m = _LINE_TYPE_VITE_COUNT_RE.search(k)
+    return int(m.group(1)) if m else None
+
+
+def collect_comando_vite_rows(sheet) -> dict[int, tuple[float, float]]:
+    """
+    Tutte le righe COMANDO VITE x nel foglio (testo in colonna A o B); kW/A da col. D e F.
+    Chiave duplicata -> errore.
     """
     used_range = sheet.UsedRange
     first_row = used_range.Row
@@ -276,23 +298,45 @@ def extract_comando_vite_summary_rows(sheet) -> list[dict]:
 
     for row in range(first_row, last_row + 1):
         col_a = sheet.Cells(row, "A").Value
-        text = str(col_a or "").strip()
-        m = _COMANDO_VITE_RE.search(text)
+        col_b = sheet.Cells(row, "B").Value
+        text_a = str(col_a or "").strip()
+        text_b = str(col_b or "").strip()
+        m = _COMANDO_VITE_RE.search(text_b) or _COMANDO_VITE_RE.search(text_a)
         if not m:
             continue
         num = int(m.group(1))
         if num in found:
-            continue
-        kw_val = parse_measure(sheet.Cells(row, "D").Value, "kW")
-        amp_val = parse_measure(sheet.Cells(row, "F").Value, "A")
+            raise RuntimeError(
+                f"Foglio V: COMANDO VITE {num} presente piu di una volta (righe duplicate per lo stesso numero)."
+            )
+        kw_val = parse_grand_total_kw(sheet.Cells(row, "D").Value)
+        amp_val = parse_grand_total_amp(sheet.Cells(row, "F").Value)
         if kw_val == 0.0 and amp_val == 0.0:
-            kw_val = parse_numeric_loose(sheet.Cells(row, "D").Value)
-            amp_val = parse_numeric_loose(sheet.Cells(row, "F").Value)
+            kw_val = parse_measure(sheet.Cells(row, "D").Value, "kW")
+            amp_val = parse_measure(sheet.Cells(row, "F").Value, "A")
+            if kw_val == 0.0 and amp_val == 0.0:
+                kw_val = parse_numeric_loose(sheet.Cells(row, "D").Value)
+                amp_val = parse_numeric_loose(sheet.Cells(row, "F").Value)
         found[num] = (kw_val, amp_val)
 
-    ordered_nums = sorted(found.keys())[:_MAX_VITE_ROWS_SMISTAMENTO]
+    return found
+
+
+def validate_vite_sheet(expected_n: int, found: dict[int, tuple[float, float]]) -> None:
+    """Verifica che ci siano esattamente N viti con numeri 1..N."""
+    need = set(range(1, expected_n + 1))
+    got = set(found.keys())
+    if len(found) != expected_n or got != need:
+        raise RuntimeError(
+            f"Tipologia linea: previste {expected_n} viti (COMANDO VITE 1…{expected_n}). "
+            f"Nel foglio V risultano {len(found)} righe con numeri: {sorted(got)}. "
+            "Correggere il file di input."
+        )
+
+
+def vite_dict_to_summary_rows(found: dict[int, tuple[float, float]]) -> list[dict]:
     out: list[dict] = []
-    for num in ordered_nums:
+    for num in sorted(found.keys()):
         kw, amp = found[num]
         out.append(
             {
@@ -706,7 +750,7 @@ def sheet_uses_range_grouping(sheet_name: str) -> bool:
 def compute_sheet_grand_total(sheet) -> tuple[float, float]:
     """
     Somma colonna D (kW) e F (A) sul UsedRange senza classificazione M/R.
-    Esclude righe con A che inizia per TOTALE e COMANDO VITE.
+    Esclude righe con A che inizia per TOTALE e righe con COMANDO VITE in colonna A o B.
     Righe senza alcun contributo numerico in D ne in F vengono saltate (riduce rumore da UsedRange esteso).
     """
     used_range = sheet.UsedRange
@@ -718,7 +762,7 @@ def compute_sheet_grand_total(sheet) -> tuple[float, float]:
         col_a = normalize_text(sheet.Cells(row, "A").Value)
         if col_a.startswith("TOTALE"):
             continue
-        if row_is_comando_vite(sheet.Cells(row, "A").Value):
+        if row_is_comando_vite(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
             continue
         raw_d = sheet.Cells(row, "D").Value
         raw_f = sheet.Cells(row, "F").Value
@@ -801,6 +845,30 @@ def group_definitions(split_cfg: SectionSplitRules) -> list[dict]:
     return [entry for entry in defs if entry["bounds"] is not None]
 
 
+def infer_first_data_row_for_mr_totals(sheet) -> int:
+    """
+    Prima riga plausibile per dati M/R (dopo eventuali righe Totali inserite sopra i dati).
+    Evita di sommare righe 8-10 quando i dati effettivi iniziano dalla 11 (shift da insert_totals_rows).
+    """
+    used_range = sheet.UsedRange
+    last_row = used_range.Row + used_range.Rows.Count - 1
+    if last_row < 8:
+        last_row = 8
+    for row in range(8, last_row + 1):
+        col_a = normalize_text(sheet.Cells(row, "A").Value)
+        if col_a.startswith("TOTALE"):
+            continue
+        if row_is_comando_vite(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+            continue
+        if extract_three_digit_code(sheet.Cells(row, "A").Value) is not None:
+            return row
+        kw_val = parse_measure(sheet.Cells(row, "D").Value, "kW")
+        amp_val = parse_measure(sheet.Cells(row, "F").Value, "A")
+        if kw_val != 0.0 or amp_val != 0.0:
+            return row
+    return 8
+
+
 def compute_totals_for_sheet(
     sheet,
     split_cfg: SectionSplitRules,
@@ -808,20 +876,21 @@ def compute_totals_for_sheet(
     used_range = sheet.UsedRange
     first_row = used_range.Row
     last_row = first_row + used_range.Rows.Count - 1
-    if last_row < 8:
-        last_row = 8
+    first_data_row = infer_first_data_row_for_mr_totals(sheet)
+    if last_row < first_data_row:
+        last_row = first_data_row
 
     totals: dict[str, dict[str, float]] = {}
     for entry in group_definitions(split_cfg):
         totals[entry["key"]] = {"kw": 0.0, "amp": 0.0}
     unmatched_rows: list[UnmatchedRow] = []
 
-    for row in range(8, last_row + 1):
+    for row in range(first_data_row, last_row + 1):
         col_a = normalize_text(sheet.Cells(row, "A").Value)
         if col_a.startswith("TOTALE"):
             continue
 
-        if row_is_comando_vite(sheet.Cells(row, "A").Value):
+        if row_is_comando_vite(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
             continue
 
         kw_val = parse_measure(sheet.Cells(row, "D").Value, "kW")
@@ -898,8 +967,11 @@ def create_summary_file(
     try:
         ws = wb.Worksheets(1)
         ws.Name = "Smistamento potenza"
-        start_row = _SMISTAMENTO_MAIN_TABLE_ROW
         vite_rows = vite_rows or []
+        if vite_rows:
+            start_row = _SMISTAMENTO_VITE_START_ROW + len(vite_rows) + 1
+        else:
+            start_row = _SMISTAMENTO_MAIN_TABLE_ROW
 
         # Layout richiesto: lavoro solo su colonne A..F
         for row in range(1, 500):
@@ -935,11 +1007,11 @@ def create_summary_file(
             rng.Borders.LineStyle = XL_CONTINUOUS
             rng.Borders.Weight = XL_MEDIUM
 
-        # Righe 7-10: Motore vite 1..4 dal foglio V (testo COMANDO VITE x)
+        # Righe da 7 in basso: Motore vite 1..N dal foglio V (testo COMANDO VITE x)
         vite_last_row = _SMISTAMENTO_VITE_START_ROW - 1
         if vite_rows:
             r = _SMISTAMENTO_VITE_START_ROW
-            for item in vite_rows[:_MAX_VITE_ROWS_SMISTAMENTO]:
+            for item in vite_rows:
                 ws.Cells(r, 1).Value = item["title"]
                 ws.Cells(r, 2).Value = normalize_output_number(item["kw"])
                 ws.Cells(r, 3).Value = normalize_output_number(item["amp"])
@@ -1105,6 +1177,13 @@ def main() -> int:
             wb_input = excel.Workbooks.Open(str(output_input_path))
             try:
                 for cfg in config_rows:
+                    if cfg.sheet_name.strip().lower() == "v":
+                        log(
+                            "[INFO] Foglio V: i dati per lo smistamento vengono letti a fine elaborazione, "
+                            "in base al numero di viti della tipologia linea scelta."
+                        )
+                        continue
+
                     sheet = get_sheet(wb_input, cfg.sheet_name)
                     if sheet is None:
                         log(f"[INFO] Foglio '{cfg.sheet_name}' non presente: salto.")
@@ -1116,13 +1195,6 @@ def main() -> int:
 
                     if use_groups:
                         totals_by_group, unmatched_rows = insert_totals_rows(sheet, split_cfg)
-                        if cfg.sheet_name.strip().lower() == "v":
-                            vite_summary_rows = extract_comando_vite_summary_rows(sheet)
-                            if vite_summary_rows:
-                                log(
-                                    f"[INFO] Foglio V: {len(vite_summary_rows)} righe COMANDO VITE -> smistamento righe "
-                                    f"{_SMISTAMENTO_VITE_START_ROW}-{_SMISTAMENTO_VITE_START_ROW + len(vite_summary_rows) - 1}."
-                                )
 
                         map_only_groups = map_group_keys_for_sheet(display_cfg, cfg.sheet_name)
                         for entry in group_definitions(split_cfg):
@@ -1195,19 +1267,34 @@ def main() -> int:
                             "perche fuori da tutti i range configurati."
                         )
                         for item in unmatched_rows:
-                            if row_is_comando_vite(item.raw_code):
+                            if row_is_comando_vite(
+                                sheet.Cells(item.row, "A").Value,
+                                sheet.Cells(item.row, "B").Value,
+                            ):
                                 continue
                             log(
                                 f"       - riga {item.row}: codice='{item.raw_code}', parsed={item.parsed_code}, "
                                 f"kW={item.kw:.2f}, A={item.amp:.2f}"
                             )
 
-                if not vite_summary_rows:
-                    v_only = get_sheet(wb_input, "V")
-                    if v_only is not None:
-                        vite_summary_rows = extract_comando_vite_summary_rows(v_only)
-                        if vite_summary_rows:
-                            log("[INFO] Foglio V presente: COMANDO VITE estratti anche senza 'V' nella lista fogli del profilo.")
+                expected_vite_n = expected_vite_count_for_line_type(selected_line_type.key)
+                vite_summary_rows = []
+                if expected_vite_n is not None:
+                    v_sheet = get_sheet(wb_input, "V")
+                    if v_sheet is None:
+                        raise RuntimeError(
+                            f"Tipologia «{selected_line_type.label}»: è obbligatorio il foglio V con "
+                            f"{expected_vite_n} righe COMANDO VITE (numeri da 1 a {expected_vite_n}). "
+                            "Foglio V assente nel file."
+                        )
+                    found_vite = collect_comando_vite_rows(v_sheet)
+                    validate_vite_sheet(expected_vite_n, found_vite)
+                    vite_summary_rows = vite_dict_to_summary_rows(found_vite)
+                    log(
+                        f"[OK] Foglio V: {expected_vite_n} viti -> smistamento righe "
+                        f"{_SMISTAMENTO_VITE_START_ROW}-{_SMISTAMENTO_VITE_START_ROW + expected_vite_n - 1} "
+                        '(etichette "Motore vite x").'
+                    )
 
                 wb_input.Save()
                 log(f"[OK] File output input aggiornato: {output_input_path.name}")
