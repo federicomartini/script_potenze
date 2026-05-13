@@ -26,6 +26,8 @@ _TRITURATORE_GROSSO_RE = re.compile(
 _LINE_TYPE_VITE_COUNT_RE = re.compile(r"_(\d+)_VITI$")
 _SMISTAMENTO_VITE_START_ROW = 7
 _SMISTAMENTO_MAIN_TABLE_ROW = 11
+# File output (*_Output.xlsx): colonna con gruppo M/R assegnato dalla classificazione a range.
+_MR_GROUP_OUTPUT_COL = "P"
 
 # Righe #SOLO_IDENTIFICATORE (es. #PASTA_LUNGA). Altre righe che iniziano con # restano commenti senza cambiare sezione.
 _CONFIG_SECTION_HEADER_RE = re.compile(r"^#([A-Za-z_][A-Za-z0-9_]*)\s*$")
@@ -1106,6 +1108,23 @@ def group_display_label_for_sheet(sheet_name: str, group_key: str, base_label: s
     return base_label
 
 
+def _row_is_mr_block_blank_separator(sheet, row: int) -> bool:
+    """Riga vuota tra intestazione kW/A e tabella dati (nessun codice M/R, nessun contributo)."""
+    col_a = normalize_text(sheet.Cells(row, "A").Value)
+    if col_a.startswith("TOTALE"):
+        return False
+    if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+        return False
+    d_cell = str(sheet.Cells(row, "D").Value or "").strip().upper()
+    if d_cell == "KW":
+        return False
+    if extract_three_digit_code(sheet.Cells(row, "A").Value) is not None:
+        return False
+    kw_val = parse_measure(sheet.Cells(row, "D").Value, "kW")
+    amp_val = parse_measure(sheet.Cells(row, "F").Value, "A")
+    return kw_val == 0.0 and amp_val == 0.0
+
+
 def find_first_mr_data_row(sheet) -> int:
     """Prima riga dati impianto M/R (codice in A e/o valori in D/F), esclusi Totali e COMANDO VITE / TRITURATORE."""
     used_range = sheet.UsedRange
@@ -1131,20 +1150,32 @@ def find_first_mr_data_row(sheet) -> int:
 
 
 def strip_existing_mr_totals_block(sheet) -> None:
-    """Rimuove un blocco Totali+kW gia inserito sopra i dati (righe sopra la riga con 'kW' in D)."""
-    a4 = normalize_text(sheet.Range("A4").Value)
-    if not a4.startswith("TOTALE"):
+    """
+    Rimuove il blocco inserito dallo script sopra i dati M/R:
+    righe 'Totale ...', riga con 'kW' in colonna D, eventuale riga vuota sotto.
+    """
+    try:
+        ur = sheet.UsedRange
+    except Exception:
         return
-    ur = sheet.UsedRange
-    last = ur.Row + ur.Rows.Count - 1
+    last = min(ur.Row + ur.Rows.Count - 1, ur.Row + 200)
     kw_row: int | None = None
-    for r in range(4, min(last, ur.Row + 120) + 1):
+    for r in range(4, last + 1):
         if str(sheet.Cells(r, "D").Value or "").strip().lower() == "kw":
             kw_row = r
             break
-    if kw_row is None or kw_row <= 4:
+    if kw_row is None:
         return
-    sheet.Rows(f"4:{kw_row - 1}").Delete()
+    t0: int | None = None
+    for r in range(4, kw_row + 1):
+        if normalize_text(sheet.Cells(r, "A").Value).startswith("TOTALE"):
+            t0 = r
+            break
+    if t0 is None:
+        return
+    sheet.Rows(f"{t0}:{kw_row}").Delete()
+    if _row_is_mr_block_blank_separator(sheet, t0):
+        sheet.Rows(f"{t0}").Delete()
 
 
 def find_first_grand_data_row(sheet) -> int:
@@ -1210,6 +1241,35 @@ def remove_sheets_not_in_config(workbook, config_rows: list[ConfigRow], line_typ
         idx -= 1
 
 
+def mr_data_row_totals_classification(
+    sheet,
+    row: int,
+    split_cfg: SectionSplitRules,
+    groups: list[dict],
+) -> tuple[bool, str | None, float, float]:
+    """
+    (include, matched_group_key, kw, amp).
+    include=False: la riga non entra nei totali.
+    include=True e matched_group_key None: contributo non assegnato ad alcun @RANGE_*.
+    """
+    col_a = normalize_text(sheet.Cells(row, "A").Value)
+    if col_a.startswith("TOTALE"):
+        return False, None, 0.0, 0.0
+    if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+        return False, None, 0.0, 0.0
+
+    kw_val = parse_measure(sheet.Cells(row, "D").Value, "kW")
+    amp_val = parse_measure(sheet.Cells(row, "F").Value, "A")
+    if kw_val == 0.0 and amp_val == 0.0:
+        return False, None, 0.0, 0.0
+
+    code = extract_three_digit_code(sheet.Cells(row, "A").Value)
+    for entry in groups:
+        if in_range(code, entry["bounds"]):
+            return True, entry["key"], kw_val, amp_val
+    return True, None, kw_val, amp_val
+
+
 def compute_totals_for_sheet(
     sheet,
     split_cfg: SectionSplitRules,
@@ -1228,26 +1288,12 @@ def compute_totals_for_sheet(
     unmatched_rows: list[UnmatchedRow] = []
 
     for row in range(first_data_row, last_row + 1):
-        col_a = normalize_text(sheet.Cells(row, "A").Value)
-        if col_a.startswith("TOTALE"):
+        incl, matched_key, kw_val, amp_val = mr_data_row_totals_classification(sheet, row, split_cfg, groups)
+        if not incl:
             continue
-
-        if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
-            continue
-
-        kw_val = parse_measure(sheet.Cells(row, "D").Value, "kW")
-        amp_val = parse_measure(sheet.Cells(row, "F").Value, "A")
-        if kw_val == 0.0 and amp_val == 0.0:
-            continue
-
-        code = extract_three_digit_code(sheet.Cells(row, "A").Value)
-        matched_key: str | None = None
-        for entry in groups:
-            if in_range(code, entry["bounds"]):
-                matched_key = entry["key"]
-                break
 
         if matched_key is None:
+            code = extract_three_digit_code(sheet.Cells(row, "A").Value)
             unmatched_rows.append(
                 UnmatchedRow(
                     row=row,
@@ -1265,6 +1311,57 @@ def compute_totals_for_sheet(
     return totals, unmatched_rows
 
 
+def clear_mr_group_annotation_column(sheet) -> None:
+    """Pulisce la colonna P nel UsedRange (annotazioni gruppo M/R)."""
+    try:
+        ur = sheet.UsedRange
+    except Exception:
+        return
+    if ur is None:
+        return
+    top = ur.Row
+    last = ur.Row + ur.Rows.Count - 1
+    sheet.Range(sheet.Cells(top, _MR_GROUP_OUTPUT_COL), sheet.Cells(last, _MR_GROUP_OUTPUT_COL)).ClearContents()
+
+
+def annotate_mr_group_column_p(
+    sheet,
+    split_cfg: SectionSplitRules,
+    *,
+    sheet_name: str,
+    cous_cous_line: bool,
+) -> None:
+    """
+    Colonna P: etichetta gruppo per ogni riga dati che concorre ai totali (anche con un solo gruppo a range).
+    Usata sia sui fogli con righe «Totale …» per gruppo sia su fogli tipo B2 (totale unico), usando gli stessi @RANGE_*.
+    """
+    clear_mr_group_annotation_column(sheet)
+    groups = group_definitions(split_cfg)
+    if not groups:
+        return
+
+    label_by_key: dict[str, str] = {}
+    for entry in groups:
+        lbl = group_display_label_for_sheet(sheet_name, entry["key"], entry["label"])
+        if cous_cous_line:
+            lbl = cous_cous_replace_pressa_in_text(lbl)
+        label_by_key[entry["key"]] = lbl
+
+    used_range = sheet.UsedRange
+    last_row = used_range.Row + used_range.Rows.Count - 1
+    first_data_row = find_first_mr_data_row(sheet)
+
+    for row in range(first_data_row, last_row + 1):
+        incl, matched_key, _, _ = mr_data_row_totals_classification(sheet, row, split_cfg, groups)
+        if not incl:
+            continue
+        cell = sheet.Cells(row, _MR_GROUP_OUTPUT_COL)
+        if matched_key is not None:
+            cell.Value = label_by_key[matched_key]
+        else:
+            cell.Value = "Non classificato"
+
+
 def insert_totals_rows(
     sheet,
     split_cfg: SectionSplitRules,
@@ -1274,13 +1371,14 @@ def insert_totals_rows(
     cous_cous_line: bool = False,
 ) -> tuple[dict[str, dict[str, float]], list[UnmatchedRow]]:
     """
-    Sopra la tabella dati: una riga Totale per ogni gruppo definito in group_definitions,
-    poi riga intestazione kW / A, poi i dati.
+    Sopra la tabella dati: righe Totale per gruppo, riga intestazione kW/A, una riga vuota, poi i dati.
+    Colonna P: gruppo assegnato a ogni riga che concorre ai totali (per ogni foglio con raggruppamento M/R).
     """
     strip_existing_mr_totals_block(sheet)
     totals, unmatched_rows = compute_totals_for_sheet(sheet, split_cfg)
     entries = group_definitions(split_cfg)
     if not entries:
+        clear_mr_group_annotation_column(sheet)
         return totals, unmatched_rows
 
     fd = find_first_mr_data_row(sheet)
@@ -1311,6 +1409,14 @@ def insert_totals_rows(
 
     sheet.Cells(hdr_row, "D").Value = "kW"
     sheet.Cells(hdr_row, "F").Value = "A"
+
+    sheet.Rows(f"{hdr_row + 1}").Insert()
+    annotate_mr_group_column_p(
+        sheet,
+        split_cfg,
+        sheet_name=sheet_name,
+        cous_cous_line=cous_cous_line,
+    )
 
     return totals, unmatched_rows
 
@@ -1634,6 +1740,12 @@ def main() -> int:
                     else:
                         unmatched_rows = []
                         insert_grand_total_row(sheet, number_format=excel_nf)
+                        annotate_mr_group_column_p(
+                            sheet,
+                            split_cfg,
+                            sheet_name=cfg.sheet_name,
+                            cous_cous_line=line_type_is_cous_cous(selected_line_type.key),
+                        )
                         kw_g, amp_g = compute_sheet_grand_total(sheet)
                         title_u = first_map_title_for_sheet(display_cfg, cfg.sheet_name)
                         if not title_u:
@@ -1674,18 +1786,21 @@ def main() -> int:
                         )
 
                     if use_groups and unmatched_rows:
+                        n_gr = len(group_definitions(split_cfg))
+                        row_shift = n_gr + 2 if n_gr else 0
                         log(
                             f"[WARN] Foglio '{cfg.sheet_name}': {len(unmatched_rows)} righe con valori non classificate "
                             "perche fuori da tutti i range configurati."
                         )
                         for item in unmatched_rows:
+                            adj_row = item.row + row_shift
                             if row_skips_mr_data_row(
-                                sheet.Cells(item.row, "A").Value,
-                                sheet.Cells(item.row, "B").Value,
+                                sheet.Cells(adj_row, "A").Value,
+                                sheet.Cells(adj_row, "B").Value,
                             ):
                                 continue
                             log(
-                                f"       - riga {item.row}: codice='{item.raw_code}', parsed={item.parsed_code}, "
+                                f"       - riga {adj_row}: codice='{item.raw_code}', parsed={item.parsed_code}, "
                                 f"kW={item.kw:.2f}, A={item.amp:.2f}"
                             )
 
