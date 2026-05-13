@@ -3,6 +3,7 @@
 "PASTA_LUNGA_2_VITI";"Pasta Lunga 2 Viti"
 "PASTA_CORTA_2_VITI";"Pasta Corta 2 Viti"
 "CTA";"CTA"
+"COUS_COUS";"Cous Cous"
 
 #LINE_DISPLAY_PASTA_LUNGA_4_VITI
 # Tutto il profilo Pasta Lunga 4 viti (range, fogli Excel, titoli smistamento).
@@ -74,3 +75,24 @@
 @MAP_SHEET_GROUP=B3;movimenti_linea;Sezionatore Incarto
 @MAP_SHEET_GROUP=B4;movimenti_linea;Sezionatore Essiccatoio 1
 @MAP_SHEET_GROUP=B5;movimenti_linea;Sezionatore Essiccatoio 2 - Raff.
+
+#LINE_DISPLAY_COUS_COUS
+# Foglio TR (non V): COMANDO TRITURATORE PRODOTTO FINE / GROSSO. Range adattabili al progetto.
+# Se sul TR ci sono anche righe M/R da totalizzare, aggiungi: @MAP_SHEET=TR
+# Banda «secondario» (etichetta @SPLIT_LABEL): @RANGE_FORMATRICE oppure @RANGE_CUOCITORE (stesso gruppo in MAP: secondario).
+# Se @RANGE_CUOCITORE e' valorizzato, ha precedenza su @RANGE_FORMATRICE. @RANGE_FORMATRICE puo' essere NONE.
+# @RANGE_PRESSA e' sempre obbligatorio (start-stop). Se @RANGE_RECUPERO_POLVERI interseca la pressa, prevale il recupero.
+@SPLIT_LABEL=Cuocitore
+@RANGE_PRESSA=165-350
+@RANGE_RECUPERO_POLVERI=191-199
+@RANGE_FORMATRICE=NONE
+@RANGE_CUOCITORE=415-449
+@RANGE_MOVIMENTI_LINEA=450-860
+@RANGE_MOVIMENTI_SELEZIONE_SILI=861-1000
+@OVERRIDE_SECONDARIO=Movimenti Cuocitore
+@MAP_SHEET=A
+@MAP_SHEET=B
+@MAP_SHEET=C
+@MAP_SHEET=CC
+@MAP_SHEET=A1
+@MAP_SHEET_GROUP=B2;secondario;Sezionatore Linea

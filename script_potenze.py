@@ -14,6 +14,15 @@ CONFIG_FILE_NAME = "configurazione_schede.txt"
 
 # Foglio "V": testo tipo "COMANDO VITE 1" in colonna A oppure B (case insensitive).
 _COMANDO_VITE_RE = re.compile(r"COMANDO\s+VITE\s*(\d+)", re.IGNORECASE)
+# Foglio "TR" (Cous Cous): COMANDO TRITURATORE PRODOTTO FINE / GROSSO in A o B.
+_TRITURATORE_FINE_RE = re.compile(
+    r"COMANDO\s+TRITURATORE\s+PRODOTTO\s+FINE\b",
+    re.IGNORECASE,
+)
+_TRITURATORE_GROSSO_RE = re.compile(
+    r"COMANDO\s+TRITURATORE\s+PRODOTTO\s+GROSSO\b",
+    re.IGNORECASE,
+)
 _LINE_TYPE_VITE_COUNT_RE = re.compile(r"_(\d+)_VITI$")
 _SMISTAMENTO_VITE_START_ROW = 7
 _SMISTAMENTO_MAIN_TABLE_ROW = 11
@@ -69,6 +78,7 @@ class LineDisplayConfig:
     offsheet_pressa_label: str | None
     offsheet_secondario_label: str | None
     sheet_group_labels: dict[tuple[str, str], str]
+    cous_cous_mode: bool = False
 
 
 @dataclass
@@ -79,7 +89,7 @@ class SectionSplitRules:
     movimenti_linea_label: str
     movimenti_selezione_sili_label: str
     pressa_range: tuple[int, int]
-    secondary_range: tuple[int, int]
+    secondary_range: tuple[int, int] | None
     recupero_polveri_range: tuple[int, int] | None
     movimenti_linea_range: tuple[int, int] | None
     movimenti_selezione_sili_range: tuple[int, int] | None
@@ -268,10 +278,41 @@ def row_is_comando_vite(col_a_value: object, col_b_value: object | None = None) 
     return False
 
 
+def row_is_comando_trituratore(col_a_value: object, col_b_value: object | None = None) -> bool:
+    """True se COMANDO TRITURATORE PRODOTTO FINE/GROSSO in colonna A o B (Cous Cous, foglio TR)."""
+    text_a = str(col_a_value or "").strip()
+    text_b = str(col_b_value or "").strip() if col_b_value is not None else ""
+    for t in (text_a, text_b):
+        if _TRITURATORE_FINE_RE.search(t) or _TRITURATORE_GROSSO_RE.search(t):
+            return True
+    return False
+
+
+def row_skips_mr_data_row(col_a_value: object, col_b_value: object | None = None) -> bool:
+    """Righe comando vite o trituratore: escluse da somme M/R e da totali foglio."""
+    return row_is_comando_vite(col_a_value, col_b_value) or row_is_comando_trituratore(
+        col_a_value, col_b_value
+    )
+
+
 def line_type_is_cous_cous(line_key: str) -> bool:
     """Linee Cous Cous: foglio TR, non il modello COMANDO VITE su V."""
     k = line_key.strip().upper()
     return "COUS_COU" in k or k.startswith("COUS_COUS")
+
+
+_COUS_COUS_PRESSA_WORD_RE = re.compile(r"(?i)\bPressa\b")
+
+
+def cous_cous_replace_pressa_in_text(text: str) -> str:
+    """Cous Cous: ovunque compare la parola 'Pressa' (titoli, MAP, override) -> 'Impastatrici'."""
+    return _COUS_COUS_PRESSA_WORD_RE.sub("Impastatrici", text)
+
+
+def _cous_cous_finalize_label(display_cfg: LineDisplayConfig, text: str) -> str:
+    if display_cfg.cous_cous_mode:
+        return cous_cous_replace_pressa_in_text(text)
+    return text
 
 
 def expected_vite_count_for_line_type(line_key: str) -> int | None:
@@ -365,6 +406,75 @@ def vite_dict_to_summary_rows(found: dict[int, tuple[float, float]]) -> list[dic
     return out
 
 
+def collect_comando_trituratore_rows(sheet) -> dict[str, tuple[float, float]]:
+    """
+    Foglio TR (Cous Cous): righe COMANDO TRITURATORE PRODOTTO FINE e GROSSO (testo in A o B); kW/A in D e F.
+    Chiavi 'fine' e 'grosso'; duplicati -> errore.
+    """
+    used_range = sheet.UsedRange
+    first_row = used_range.Row
+    last_row = first_row + used_range.Rows.Count - 1
+    found: dict[str, tuple[float, float]] = {}
+
+    for row in range(first_row, last_row + 1):
+        col_a = sheet.Cells(row, "A").Value
+        col_b = sheet.Cells(row, "B").Value
+        text_a = str(col_a or "").strip()
+        text_b = str(col_b or "").strip()
+        kind: str | None = None
+        if _TRITURATORE_FINE_RE.search(text_b) or _TRITURATORE_FINE_RE.search(text_a):
+            kind = "fine"
+        elif _TRITURATORE_GROSSO_RE.search(text_b) or _TRITURATORE_GROSSO_RE.search(text_a):
+            kind = "grosso"
+        if not kind:
+            continue
+        if kind in found:
+            raise RuntimeError(
+                f"Foglio TR: COMANDO TRITURATORE PRODOTTO {kind.upper()} presente piu di una volta."
+            )
+        kw_val = parse_grand_total_kw(sheet.Cells(row, "D").Value)
+        amp_val = parse_grand_total_amp(sheet.Cells(row, "F").Value)
+        if kw_val == 0.0 and amp_val == 0.0:
+            kw_val = parse_measure(sheet.Cells(row, "D").Value, "kW")
+            amp_val = parse_measure(sheet.Cells(row, "F").Value, "A")
+            if kw_val == 0.0 and amp_val == 0.0:
+                kw_val = parse_numeric_loose(sheet.Cells(row, "D").Value)
+                amp_val = parse_numeric_loose(sheet.Cells(row, "F").Value)
+        found[kind] = (kw_val, amp_val)
+
+    return found
+
+
+def validate_trituratore_sheet(found: dict[str, tuple[float, float]]) -> None:
+    """Esattamente una riga FINE e una GROSSO sul foglio TR."""
+    need = {"fine", "grosso"}
+    got = set(found.keys())
+    if got != need:
+        raise RuntimeError(
+            "Foglio TR (Cous Cous): servono esattamente due righe, "
+            "COMANDO TRITURATORE PRODOTTO FINE e COMANDO TRITURATORE PRODOTTO GROSSO "
+            f"(testo in colonna A o B). Trovati tipi: {sorted(got)}."
+        )
+
+
+def trituratore_dict_to_summary_rows(found: dict[str, tuple[float, float]]) -> list[dict]:
+    titles = {"fine": "Trituratore prodotto fine", "grosso": "Trituratore prodotto grosso"}
+    out: list[dict] = []
+    for kind in ("fine", "grosso"):
+        kw, amp = found[kind]
+        out.append(
+            {
+                "title": titles[kind],
+                "kw": normalize_output_number(kw),
+                "amp": normalize_output_number(amp),
+                "rif": "TR",
+                "is_tagliapasta": False,
+                "group_key": f"TR:trituratore:{kind}",
+            }
+        )
+    return out
+
+
 def read_static_row_measures(sheet, cell_ref: str) -> tuple[float, float]:
     """kW e A sulla stessa riga del riferimento: colonne D e F (come righe impianto)."""
     row, _col = parse_excel_cell_ref(cell_ref)
@@ -383,7 +493,10 @@ def read_unified_line_config(config_path: Path, line_type_key: str) -> tuple[lis
     Profilo unico per la scelta menu: sezione #LINE_DISPLAY_<CHIAVE> (CHIAVE = prima colonna di #LINE_TYPES).
 
     Contiene tutto cio che serve:
-      - Impianto: @SPLIT_LABEL, @LABEL_*, @RANGE_*
+      - Impianto: @SPLIT_LABEL, @LABEL_*, @RANGE_* (@RANGE_PRESSA sempre obbligatorio: start-stop).
+        @RANGE_RECUPERO_POLVERI opzionale: se interseca @RANGE_PRESSA, i codici nel recupero vanno al
+        gruppo recupero (priorità sulla Pressa). @RANGE_CUOCITORE opzionale sul gruppo secondario
+        (stessa chiave «secondario» di @RANGE_FORMATRICE; se valorizzato ha precedenza su FORMATRICE).
       - Fogli da elaborare:
           * se c'e almeno una @MAP_SHEET_GROUP o @MAP_SHEET -> solo i fogli citati (ordine di prima apparizione);
           * altrimenti -> righe "Titolo";"NomeFoglio"
@@ -396,15 +509,19 @@ def read_unified_line_config(config_path: Path, line_type_key: str) -> tuple[lis
 
     quoted_sheet_rows: list[ConfigRow] = []
     split_label = "Stenditrice"
-    pressa_label = "Movimenti Pressa"
+    if line_type_is_cous_cous(line_type_key):
+        pressa_label = "Movimenti Impastatrici"
+    else:
+        pressa_label = "Movimenti Pressa"
     recupero_polveri_label = "Movimenti Recupero Polveri"
     movimenti_linea_label = "Movimenti Linea"
     movimenti_selezione_sili_label = "Movimenti selezione prodotto e sili"
     pressa_range = (165, 350)
     secondary_range = (351, 449)
-    recupero_polveri_range: tuple[int, int] | None = None
-    movimenti_linea_range: tuple[int, int] | None = (450, 860)
-    movimenti_selezione_sili_range: tuple[int, int] | None = None
+    recupero_polveri_range = None
+    movimenti_linea_range = (450, 860)
+    movimenti_selezione_sili_range = None
+    cuocitore_range_input = None
 
     label_overrides: dict[str, str] = {}
     static_summary_rows: list[tuple[str | None, str, str]] = []
@@ -530,10 +647,19 @@ def read_unified_line_config(config_path: Path, line_type_key: str) -> tuple[lis
                 movimenti_selezione_sili_label = value_stripped
             continue
         if key_u == "@RANGE_PRESSA":
-            pressa_range = _parse_range(value_stripped)
+            try:
+                pressa_range = _parse_range(value_stripped)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"#{target}: @RANGE_PRESSA e' obbligatorio: intervallo start-stop (es. 165-350); "
+                    "NONE non e' ammesso."
+                ) from exc
             continue
         if key_u == "@RANGE_FORMATRICE":
-            secondary_range = _parse_range(value_stripped)
+            secondary_range = _parse_optional_range(value_stripped)
+            continue
+        if key_u == "@RANGE_CUOCITORE":
+            cuocitore_range_input = _parse_optional_range(value_stripped)
             continue
         if key_u == "@RANGE_RECUPERO_POLVERI":
             recupero_polveri_range = _parse_optional_range(value_stripped)
@@ -578,6 +704,14 @@ def read_unified_line_config(config_path: Path, line_type_key: str) -> tuple[lis
 
         log(f"[WARN] Direttiva sconosciuta in #{target} ignorata: {line}")
 
+    if cuocitore_range_input is not None:
+        if secondary_range is not None and secondary_range != cuocitore_range_input:
+            log(
+                "[WARN] @RANGE_CUOCITORE e @RANGE_FORMATRICE entrambi valorizzati e diversi: "
+                "per il gruppo secondario (@SPLIT_LABEL) si applica solo @RANGE_CUOCITORE."
+            )
+        secondary_range = cuocitore_range_input
+
     if map_sheet_names_ordered:
         if quoted_sheet_rows:
             log(
@@ -594,6 +728,25 @@ def read_unified_line_config(config_path: Path, line_type_key: str) -> tuple[lis
                 dedupe_seen.add(u)
                 deduped.append(r)
         rows = deduped
+
+    is_cc = line_type_is_cous_cous(line_type_key)
+    if is_cc:
+        split_label = cous_cous_replace_pressa_in_text(split_label)
+        pressa_label = cous_cous_replace_pressa_in_text(pressa_label)
+        recupero_polveri_label = cous_cous_replace_pressa_in_text(recupero_polveri_label)
+        movimenti_linea_label = cous_cous_replace_pressa_in_text(movimenti_linea_label)
+        movimenti_selezione_sili_label = cous_cous_replace_pressa_in_text(movimenti_selezione_sili_label)
+        if offsheet_pressa_label:
+            offsheet_pressa_label = cous_cous_replace_pressa_in_text(offsheet_pressa_label)
+        if offsheet_secondario_label:
+            offsheet_secondario_label = cous_cous_replace_pressa_in_text(offsheet_secondario_label)
+        label_overrides = {k: cous_cous_replace_pressa_in_text(v) for k, v in label_overrides.items()}
+        static_summary_rows = [
+            (sf, ref, cous_cous_replace_pressa_in_text(tit)) for sf, ref, tit in static_summary_rows
+        ]
+        sheet_group_labels = {
+            k: cous_cous_replace_pressa_in_text(v) for k, v in sheet_group_labels.items()
+        }
 
     rules = SectionSplitRules(
         split_label=split_label,
@@ -614,6 +767,7 @@ def read_unified_line_config(config_path: Path, line_type_key: str) -> tuple[lis
         offsheet_pressa_label=offsheet_pressa_label,
         offsheet_secondario_label=offsheet_secondario_label,
         sheet_group_labels=sheet_group_labels,
+        cous_cous_mode=is_cc,
     )
     return rows, rules, display_cfg
 
@@ -630,10 +784,12 @@ def summary_label_for_group(
         primary = display_cfg.primary_range_sheet.strip().upper()
         if sheet_name.strip().upper() != primary:
             if group_key == "pressa" and display_cfg.offsheet_pressa_label:
-                return display_cfg.offsheet_pressa_label
+                return _cous_cous_finalize_label(display_cfg, display_cfg.offsheet_pressa_label)
             if group_key == "secondario" and display_cfg.offsheet_secondario_label:
-                return display_cfg.offsheet_secondario_label
-    return display_cfg.label_overrides.get(group_key, default_label)
+                return _cous_cous_finalize_label(display_cfg, display_cfg.offsheet_secondario_label)
+    return _cous_cous_finalize_label(
+        display_cfg, display_cfg.label_overrides.get(group_key, default_label)
+    )
 
 
 def title_for_sheet_group(
@@ -652,7 +808,7 @@ def title_for_sheet_group(
     # Fogli tipo B1: titoli da gruppi sono "Movimenti ..." -> nello smistamento usare "Sezionatore ...".
     if sheet_name_suffix_numeric_equals_one(sheet_name) and title.startswith("Movimenti "):
         title = "Sezionatore " + title[len("Movimenti ") :]
-    return title
+    return _cous_cous_finalize_label(display_cfg, title)
 
 
 def read_line_type_options(config_path: Path) -> list[LineTypeOption]:
@@ -697,6 +853,7 @@ def read_line_type_options(config_path: Path) -> list[LineTypeOption]:
         LineTypeOption("PASTA_LUNGA_2_VITI", "Pasta Lunga 2 Viti"),
         LineTypeOption("PASTA_CORTA_2_VITI", "Pasta Corta 2 Viti"),
         LineTypeOption("CTA", "CTA"),
+        LineTypeOption("COUS_COUS", "Cous Cous"),
     ]
 
 
@@ -839,7 +996,7 @@ def sheet_uses_range_grouping(sheet_name: str) -> bool:
 def compute_sheet_grand_total(sheet) -> tuple[float, float]:
     """
     Somma colonna D (kW) e F (A) sul UsedRange senza classificazione M/R.
-    Esclude righe con A che inizia per TOTALE e righe con COMANDO VITE in colonna A o B.
+    Esclude righe con A che inizia per TOTALE e righe COMANDO VITE / COMANDO TRITURATORE (A o B).
     Righe senza alcun contributo numerico in D ne in F vengono saltate (riduce rumore da UsedRange esteso).
     """
     used_range = sheet.UsedRange
@@ -851,7 +1008,7 @@ def compute_sheet_grand_total(sheet) -> tuple[float, float]:
         col_a = normalize_text(sheet.Cells(row, "A").Value)
         if col_a.startswith("TOTALE"):
             continue
-        if row_is_comando_vite(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+        if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
             continue
         raw_d = sheet.Cells(row, "D").Value
         raw_f = sheet.Cells(row, "F").Value
@@ -869,7 +1026,7 @@ def first_map_title_for_sheet(display_cfg: LineDisplayConfig, sheet_name: str) -
     sn = sheet_name.strip().upper()
     for (sh, _gk), title in display_cfg.sheet_group_labels.items():
         if sh == sn:
-            return title
+            return _cous_cous_finalize_label(display_cfg, title)
     return None
 
 
@@ -919,7 +1076,8 @@ def in_range(code: int | None, bounds: tuple[int, int]) -> bool:
 
 def group_definitions(split_cfg: SectionSplitRules) -> list[dict]:
     defs: list[dict] = [
-        # Priorita: recupero prima di pressa (range sovrapposti possibili, es. Cous Cous 191-199)
+        # Prima recupero, poi pressa: se @RANGE_RECUPERO_POLVERI e' dentro (o interseca) @RANGE_PRESSA,
+        # i codici nel recupero devono contare come recupero, non come pressa.
         {"key": "recupero_polveri", "label": split_cfg.recupero_polveri_label, "bounds": split_cfg.recupero_polveri_range},
         {"key": "pressa", "label": split_cfg.pressa_label, "bounds": split_cfg.pressa_range},
         {"key": "secondario", "label": split_cfg.split_label, "bounds": split_cfg.secondary_range},
@@ -933,8 +1091,23 @@ def group_definitions(split_cfg: SectionSplitRules) -> list[dict]:
     return [entry for entry in defs if entry["bounds"] is not None]
 
 
+def group_display_label_for_sheet(sheet_name: str, group_key: str, base_label: str) -> str:
+    """
+    Etichetta mostrata per un gruppo su un dato foglio (Output Excel e default smistamento).
+    Foglio C vs CC: stesso @RANGE_MOVIMENTI_SELEZIONE_SILI, descrizioni distinte.
+    """
+    if group_key != "movimenti_selezione_sili":
+        return base_label
+    sn = sheet_name.strip().upper()
+    if sn == "CC":
+        return "Movimenti Scarico Sili e Confezionamento"
+    if sn == "C":
+        return "Mov. Selezione Prodotto e Carico Sili"
+    return base_label
+
+
 def find_first_mr_data_row(sheet) -> int:
-    """Prima riga dati impianto M/R (codice in A e/o valori in D/F), esclusi Totali e COMANDO VITE."""
+    """Prima riga dati impianto M/R (codice in A e/o valori in D/F), esclusi Totali e COMANDO VITE / TRITURATORE."""
     used_range = sheet.UsedRange
     first_row = used_range.Row
     last_row = first_row + used_range.Rows.Count - 1
@@ -943,7 +1116,7 @@ def find_first_mr_data_row(sheet) -> int:
         col_a = normalize_text(sheet.Cells(row, "A").Value)
         if col_a.startswith("TOTALE"):
             continue
-        if row_is_comando_vite(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+        if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
             continue
         d_cell = str(sheet.Cells(row, "D").Value or "").strip().upper()
         if d_cell == "KW":
@@ -982,7 +1155,7 @@ def find_first_grand_data_row(sheet) -> int:
         col_a = normalize_text(sheet.Cells(row, "A").Value)
         if col_a.startswith("TOTALE"):
             continue
-        if row_is_comando_vite(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+        if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
             continue
         raw_d = sheet.Cells(row, "D").Value
         raw_f = sheet.Cells(row, "F").Value
@@ -1014,15 +1187,18 @@ def insert_grand_total_row(sheet, *, number_format: str = "0.00") -> None:
     sheet.Range(f"F{fd}").NumberFormat = number_format
 
 
-def remove_sheets_not_in_config(workbook, config_rows: list[ConfigRow]) -> None:
+def remove_sheets_not_in_config(workbook, config_rows: list[ConfigRow], line_type_key: str) -> None:
     """Elimina dal workbook i fogli il cui nome non compare nella configurazione della linea scelta.
-    Il foglio V non viene mai rimosso (COMANDO VITE)."""
+    Il foglio V non viene mai rimosso (COMANDO VITE). Il foglio TR non viene rimosso per linee Cous Cous."""
     allowed = {str(c.sheet_name).strip().upper() for c in config_rows}
     idx = workbook.Worksheets.Count
     while idx >= 1:
         ws = workbook.Worksheets(idx)
         name_u = str(ws.Name).strip().upper()
         if name_u == "V":
+            idx -= 1
+            continue
+        if name_u == "TR" and line_type_is_cous_cous(line_type_key):
             idx -= 1
             continue
         if name_u not in allowed:
@@ -1045,8 +1221,9 @@ def compute_totals_for_sheet(
     if last_row < first_data_row:
         last_row = first_data_row
 
+    groups = group_definitions(split_cfg)
     totals: dict[str, dict[str, float]] = {}
-    for entry in group_definitions(split_cfg):
+    for entry in groups:
         totals[entry["key"]] = {"kw": 0.0, "amp": 0.0}
     unmatched_rows: list[UnmatchedRow] = []
 
@@ -1055,7 +1232,7 @@ def compute_totals_for_sheet(
         if col_a.startswith("TOTALE"):
             continue
 
-        if row_is_comando_vite(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+        if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
             continue
 
         kw_val = parse_measure(sheet.Cells(row, "D").Value, "kW")
@@ -1065,7 +1242,7 @@ def compute_totals_for_sheet(
 
         code = extract_three_digit_code(sheet.Cells(row, "A").Value)
         matched_key: str | None = None
-        for entry in group_definitions(split_cfg):
+        for entry in groups:
             if in_range(code, entry["bounds"]):
                 matched_key = entry["key"]
                 break
@@ -1092,7 +1269,9 @@ def insert_totals_rows(
     sheet,
     split_cfg: SectionSplitRules,
     *,
+    sheet_name: str,
     number_format: str = "0.00",
+    cous_cous_line: bool = False,
 ) -> tuple[dict[str, dict[str, float]], list[UnmatchedRow]]:
     """
     Sopra la tabella dati: una riga Totale per ogni gruppo definito in group_definitions,
@@ -1120,7 +1299,11 @@ def insert_totals_rows(
     for i, entry in enumerate(entries):
         r = fd + i
         tw = totals.get(entry["key"], {"kw": 0.0, "amp": 0.0})
-        sheet.Cells(r, "A").Value = f"Totale {entry['label']}"
+        row_label = group_display_label_for_sheet(sheet_name, entry["key"], entry["label"])
+        label_a = f"Totale {row_label}"
+        if cous_cous_line:
+            label_a = cous_cous_replace_pressa_in_text(label_a)
+        sheet.Cells(r, "A").Value = label_a
         sheet.Cells(r, "D").Value = normalize_output_number(tw["kw"])
         sheet.Cells(r, "F").Value = normalize_output_number(tw["amp"])
         sheet.Cells(r, "D").NumberFormat = number_format
@@ -1374,19 +1557,32 @@ def main() -> int:
         try:
             wb_input = excel.Workbooks.Open(str(output_input_path))
             try:
-                expected_vite_n = expected_vite_count_for_line_type(selected_line_type.key)
-                if expected_vite_n is not None:
-                    v_sheet = get_sheet(wb_input, "V")
-                    if v_sheet is None:
+                if line_type_is_cous_cous(selected_line_type.key):
+                    tr_sheet = get_sheet(wb_input, "TR")
+                    if tr_sheet is None:
                         raise RuntimeError(
-                            f"Tipologia «{selected_line_type.label}»: è obbligatorio il foglio V con "
-                            f"{expected_vite_n} righe COMANDO VITE (numeri da 1 a {expected_vite_n}). "
-                            "Foglio V assente nel file."
+                            "Tipologia Cous Cous: e' obbligatorio il foglio TR con "
+                            "COMANDO TRITURATORE PRODOTTO FINE e COMANDO TRITURATORE PRODOTTO GROSSO "
+                            "(testo in colonna A o B). Foglio TR assente nel file."
                         )
-                    found_vite = collect_comando_vite_rows(v_sheet)
-                    validate_vite_sheet(expected_vite_n, found_vite)
-                    vite_summary_rows = vite_dict_to_summary_rows(found_vite)
-                    log(f"[OK] Foglio V: {expected_vite_n} COMANDO VITE verificati.")
+                    found_tr = collect_comando_trituratore_rows(tr_sheet)
+                    validate_trituratore_sheet(found_tr)
+                    vite_summary_rows = trituratore_dict_to_summary_rows(found_tr)
+                    log("[OK] Foglio TR: COMANDO TRITURATORE FINE e GROSSO verificati.")
+                else:
+                    expected_vite_n = expected_vite_count_for_line_type(selected_line_type.key)
+                    if expected_vite_n is not None:
+                        v_sheet = get_sheet(wb_input, "V")
+                        if v_sheet is None:
+                            raise RuntimeError(
+                                f"Tipologia «{selected_line_type.label}»: è obbligatorio il foglio V con "
+                                f"{expected_vite_n} righe COMANDO VITE (numeri da 1 a {expected_vite_n}). "
+                                "Foglio V assente nel file."
+                            )
+                        found_vite = collect_comando_vite_rows(v_sheet)
+                        validate_vite_sheet(expected_vite_n, found_vite)
+                        vite_summary_rows = vite_dict_to_summary_rows(found_vite)
+                        log(f"[OK] Foglio V: {expected_vite_n} COMANDO VITE verificati.")
 
                 for cfg in config_rows:
                     log(f"[INFO] Elaboro foglio '{cfg.sheet_name}'...")
@@ -1403,7 +1599,11 @@ def main() -> int:
 
                     if use_groups:
                         totals_by_group, unmatched_rows = insert_totals_rows(
-                            sheet, split_cfg, number_format=excel_nf
+                            sheet,
+                            split_cfg,
+                            sheet_name=cfg.sheet_name,
+                            number_format=excel_nf,
+                            cous_cous_line=line_type_is_cous_cous(selected_line_type.key),
                         )
 
                         map_only_groups = map_group_keys_for_sheet(display_cfg, cfg.sheet_name)
@@ -1411,7 +1611,12 @@ def main() -> int:
                             key = entry["key"]
                             if map_only_groups is not None and key not in map_only_groups:
                                 continue
-                            title = title_for_sheet_group(cfg.sheet_name, key, entry["label"], display_cfg)
+                            default_for_title = group_display_label_for_sheet(
+                                cfg.sheet_name, key, entry["label"]
+                            )
+                            title = title_for_sheet_group(
+                                cfg.sheet_name, key, default_for_title, display_cfg
+                            )
                             kw = totals_by_group.get(key, {}).get("kw", 0.0)
                             amp = totals_by_group.get(key, {}).get("amp", 0.0)
                             if abs(kw) <= 1e-9 and abs(amp) <= 1e-9:
@@ -1474,7 +1679,7 @@ def main() -> int:
                             "perche fuori da tutti i range configurati."
                         )
                         for item in unmatched_rows:
-                            if row_is_comando_vite(
+                            if row_skips_mr_data_row(
                                 sheet.Cells(item.row, "A").Value,
                                 sheet.Cells(item.row, "B").Value,
                             ):
@@ -1484,7 +1689,7 @@ def main() -> int:
                                 f"kW={item.kw:.2f}, A={item.amp:.2f}"
                             )
 
-                remove_sheets_not_in_config(wb_input, config_rows)
+                remove_sheets_not_in_config(wb_input, config_rows, selected_line_type.key)
 
                 wb_input.Save()
                 log(f"[OK] File output input aggiornato: {output_input_path.name}")

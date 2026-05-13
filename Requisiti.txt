@@ -33,16 +33,18 @@
 	- CTA
 	- Cous Cous
 9. Regole di raggruppamento a range (estremi inclusi), da gestire tramite configurazione:
+   - @RANGE_PRESSA obbligatorio per ogni profilo (intervallo start-stop; NONE non ammesso)
    - [165;350] -> gruppo Pressa per tutte le linee
      (per Cous Cous il nome gruppo è "Movimenti Impastatrici")
    - Solo Cous Cous: [191;199] -> gruppo "Movimenti Recupero Polveri"
-     (questo sottogruppo NON va in Pressa/Impastatrici)
+     (se questo intervallo e' incluso in quello di Pressa/Impastatrici, i codici nel recupero
+     contano come recupero: priorità sul gruppo Pressa/Impastatrici)
    - [351;449] -> gruppo secondario per linee NON Cous Cous:
      - Pasta Lunga -> Stenditrice
      - Pasta Corta -> Tagliapasta
      - GM -> Matassatrice
      - CTA -> Niditrice
-   - Solo Cous Cous: al posto della regola precedente usare [415;449] -> "Cuocitore"
+   - Solo Cous Cous: banda Cuocitore (gruppo secondario in MAP) configurabile con @RANGE_CUOCITORE o, in alternativa, @RANGE_FORMATRICE (se entrambi, prevale @RANGE_CUOCITORE)
    - [450;860] -> gruppo "Movimenti Linea" per tutte le linee
    - Solo Cous Cous: [861;1000] -> gruppo "Movimenti selezione prodotto e sili"
 
