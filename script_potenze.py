@@ -277,11 +277,14 @@ def line_type_is_cous_cous(line_key: str) -> bool:
 def expected_vite_count_for_line_type(line_key: str) -> int | None:
     """
     Numero viti atteso dal nome tipologia (es. PASTA_LUNGA_4_VITI -> 4).
-    None per CTA, Cous Cous, ecc.
+    CTA: una sola vite (COMANDO VITE 1) anche senza suffisso _N_VITI nel nome.
+    None per Cous Cous, ecc.
     """
     if line_type_is_cous_cous(line_key):
         return None
     k = line_key.strip().upper()
+    if k == "CTA" or k.startswith("CTA_"):
+        return 1
     m = _LINE_TYPE_VITE_COUNT_RE.search(k)
     return int(m.group(1)) if m else None
 

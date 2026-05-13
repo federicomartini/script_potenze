@@ -66,11 +66,11 @@
 @RANGE_RECUPERO_POLVERI=NONE
 @RANGE_MOVIMENTI_LINEA=450-860
 @RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
-"Movimenti Pressa";"A"
-"Movimenti Linea";"B"
-"Sezionatore Pressa";"A1"
-"Sezionatore Vent. Trabatto";"B2"
-"Sezionatore Vent. TCM Incarto";"B3"
-"Sezionatore Vent. TCM Essiccazione 1";"B5"
-"Sezionatore Vent. TCM Essiccazione 2";"B6"
-"Sezionatore Ventilazioni Raffreddatore";"B8"
+@OVERRIDE_SECONDARIO=Movimenti Niditrice
+@MAP_SHEET=A
+@MAP_SHEET=B
+@MAP_SHEET=A1
+@MAP_SHEET_GROUP=B2;movimenti_linea;Sezionatore Preincarto
+@MAP_SHEET_GROUP=B3;movimenti_linea;Sezionatore Incarto
+@MAP_SHEET_GROUP=B4;movimenti_linea;Sezionatore Essiccatoio 1
+@MAP_SHEET_GROUP=B5;movimenti_linea;Sezionatore Essiccatoio 2 - Raff.
