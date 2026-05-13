@@ -28,6 +28,13 @@ _SMISTAMENTO_VITE_START_ROW = 7
 _SMISTAMENTO_MAIN_TABLE_ROW = 11
 # File output (*_Output.xlsx): colonna con gruppo M/R assegnato dalla classificazione a range.
 _MR_GROUP_OUTPUT_COL = "P"
+# Tabella totali M/R: riga 4 = intestazione gialla (Totali / kW / A); righe successive = un totale per gruppo;
+# poi riga vuota; poi intestazione tabella dati originale (D/F con kW e A); poi i dati.
+_MR_TOTALS_BLOCK_FIRST_ROW = 4
+# Solo colonne A..F per i totali (il resto non serve).
+_MR_TOTALS_LAST_COL = 6
+# Foglio con un solo totale: righe inserite sopra l'intestazione (Totali + Totale + vuoto), senza riga target assoluta.
+_GRAND_TOTAL_BLOCK_ROWS = 3
 
 # Righe #SOLO_IDENTIFICATORE (es. #PASTA_LUNGA). Altre righe che iniziano con # restano commenti senza cambiare sezione.
 _CONFIG_SECTION_HEADER_RE = re.compile(r"^#([A-Za-z_][A-Za-z0-9_]*)\s*$")
@@ -45,6 +52,8 @@ XL_INSIDE_HORIZONTAL = 12
 XL_PATTERN_NONE = -4142
 XL_COLORINDEX_NONE = -4142
 COLOR_WHITE = 16777215
+# Giallo foglio Excel (BGR 00FFFF) per la prima riga della tabella totali.
+COLOR_YELLOW_EXCEL = 65535
 XL_CONTINUOUS = 1
 XL_THIN = 2
 XL_MEDIUM = -4138
@@ -998,7 +1007,8 @@ def sheet_uses_range_grouping(sheet_name: str) -> bool:
 def compute_sheet_grand_total(sheet) -> tuple[float, float]:
     """
     Somma colonna D (kW) e F (A) sul UsedRange senza classificazione M/R.
-    Esclude righe con A che inizia per TOTALE e righe COMANDO VITE / COMANDO TRITURATORE (A o B).
+    Esclude righe con A «Totali» (tabella totali), le sole righe «Totale» generate dallo script
+    (A uguale a «Totale» o «Totale <gruppo>»), e righe COMANDO VITE / COMANDO TRITURATORE (A o B).
     Righe senza alcun contributo numerico in D ne in F vengono saltate (riduce rumore da UsedRange esteso).
     """
     used_range = sheet.UsedRange
@@ -1008,7 +1018,9 @@ def compute_sheet_grand_total(sheet) -> tuple[float, float]:
     total_amp = 0.0
     for row in range(first_row, last_row + 1):
         col_a = normalize_text(sheet.Cells(row, "A").Value)
-        if col_a.startswith("TOTALE"):
+        if col_a == "TOTALI":
+            continue
+        if is_script_generated_mr_totale_label(col_a):
             continue
         if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
             continue
@@ -1108,10 +1120,65 @@ def group_display_label_for_sheet(sheet_name: str, group_key: str, base_label: s
     return base_label
 
 
+def _mr_strict_blank_separator_a_to_f(sheet, row: int) -> bool:
+    """Riga separatrice tra tabella totali e tabella dati: celle A..F tutte vuote."""
+    for c in range(1, _MR_TOTALS_LAST_COL + 1):
+        v = sheet.Cells(row, c).Value
+        if v is not None and str(v).strip() != "":
+            return False
+    return True
+
+
+def is_script_generated_mr_totale_label(col_a_normalized: str) -> bool:
+    """
+    True solo per le righe «Totale» inserite dallo script (da rimuovere in strip / da escludere da somme):
+    - A esattamente «Totale» → normalizzato «TOTALE»
+    - «Totale <gruppo>» → «TOTALE » seguito da testo (es. «TOTALE PRESSA»)
+
+    False per testi di riga originale del foglio tipo «Totale: 12,5» («TOTALE: ...») o altre varianti.
+    """
+    if not col_a_normalized:
+        return False
+    if col_a_normalized == "TOTALE":
+        return True
+    return col_a_normalized.startswith("TOTALE ") and len(col_a_normalized) > len("TOTALE ")
+
+
+def mr_insert_anchor_row_above_first_data(sheet, first_data_row: int) -> int:
+    """
+    Prima riga da cui inserire il blocco di righe così che intestazione e dati restino uniti.
+    Se tra intestazione e primo dato c'è una riga vuota in A..F, l'inserimento deve partire
+    dall'intestazione (non dalla riga vuota), altrimenti l'intestazione non scende e kW/A finiscono sulla riga sbagliata.
+    """
+    r = first_data_row - 1
+    while r >= 1 and _mr_strict_blank_separator_a_to_f(sheet, r):
+        r -= 1
+    return max(1, r)
+
+
+def mr_data_header_row_above(
+    sheet,
+    first_data_row: int,
+    *,
+    min_row: int,
+) -> int:
+    """
+    Riga di intestazione tabella dati: la prima non vuota in A..F sopra il primo dato, saltando
+    solo righe completamente vuote in A..F (stesso gap possibile tra intestazione e dati).
+    min_row: non risalire sopra questa riga (subito sotto il blocco totali inserito).
+    """
+    r = first_data_row - 1
+    while r > min_row and _mr_strict_blank_separator_a_to_f(sheet, r):
+        r -= 1
+    return max(min_row, r)
+
+
 def _row_is_mr_block_blank_separator(sheet, row: int) -> bool:
     """Riga vuota tra intestazione kW/A e tabella dati (nessun codice M/R, nessun contributo)."""
     col_a = normalize_text(sheet.Cells(row, "A").Value)
-    if col_a.startswith("TOTALE"):
+    if col_a == "TOTALI":
+        return False
+    if is_script_generated_mr_totale_label(col_a):
         return False
     if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
         return False
@@ -1125,6 +1192,85 @@ def _row_is_mr_block_blank_separator(sheet, row: int) -> bool:
     return kw_val == 0.0 and amp_val == 0.0
 
 
+def replace_dim_potenza_corrente_attr_labels(
+    sheet,
+    row_top: int,
+    row_bottom: int,
+    *,
+    max_col: int = 24,
+    only_columns_d_f: bool = False,
+) -> None:
+    """
+    Sostituisce le etichette potenza/corrente con 'kW' e 'A'.
+    - Se only_columns_d_f=True: modifica solo le colonne D ed F (intestazione tabella dati spostata),
+      così il resto della riga resta identico al foglio originale.
+    - Se False: scansiona fino a max_col (es. più righe sopra la tabella) e applica anche i casi
+      schema con (104) / (101) oltre D/F se presenti.
+    """
+    for r in range(row_top, row_bottom + 1):
+        col_range = (4, 6) if only_columns_d_f else range(1, max_col + 1)
+        for c in col_range:
+            v = sheet.Cells(r, c).Value
+            if v is None:
+                continue
+            t = str(v).strip()
+            if not t:
+                continue
+            low = t.lower()
+            if c == 4 and "potenza" in low:
+                sheet.Cells(r, c).Value = "kW"
+            elif c == 6 and "corrente" in low:
+                sheet.Cells(r, c).Value = "A"
+            elif not only_columns_d_f:
+                if "potenza" in low and "(104)" in low:
+                    sheet.Cells(r, c).Value = "kW"
+                elif "corrente" in low and "(101)" in low:
+                    sheet.Cells(r, c).Value = "A"
+
+
+def clear_sheet_row_cells(sheet, row: int, *, from_col: int = 1, to_col: int = 16) -> None:
+    for c in range(from_col, to_col + 1):
+        sheet.Cells(row, c).ClearContents()
+
+
+def clear_row_contents_right_of_col(sheet, row: int, *, from_col: int) -> None:
+    """Svuota celle da from_col in poi (es. oltre F per righe totali)."""
+    for c in range(from_col, 50):
+        sheet.Cells(row, c).ClearContents()
+
+
+def normalize_data_kw_amp_numeric_cells(
+    sheet,
+    first_data_row: int,
+    last_row: int,
+    *,
+    number_format: str,
+) -> None:
+    """
+    Nella tabella dati: in D e F solo numeri (unità solo in intestazione), usando parse_grand_total_*.
+    """
+    for row in range(first_data_row, last_row + 1):
+        col_a = normalize_text(sheet.Cells(row, "A").Value)
+        if is_script_generated_mr_totale_label(col_a):
+            continue
+        if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+            continue
+        raw_d = sheet.Cells(row, "D").Value
+        raw_f = sheet.Cells(row, "F").Value
+        d_blank = raw_d is None or str(raw_d).strip() == ""
+        f_blank = raw_f is None or str(raw_f).strip() == ""
+        if d_blank and f_blank:
+            continue
+        if not d_blank:
+            kw = parse_grand_total_kw(raw_d)
+            sheet.Cells(row, "D").Value = normalize_output_number(kw)
+            sheet.Cells(row, "D").NumberFormat = number_format
+        if not f_blank:
+            amp = parse_grand_total_amp(raw_f)
+            sheet.Cells(row, "F").Value = normalize_output_number(amp)
+            sheet.Cells(row, "F").NumberFormat = number_format
+
+
 def find_first_mr_data_row(sheet) -> int:
     """Prima riga dati impianto M/R (codice in A e/o valori in D/F), esclusi Totali e COMANDO VITE / TRITURATORE."""
     used_range = sheet.UsedRange
@@ -1133,9 +1279,15 @@ def find_first_mr_data_row(sheet) -> int:
     start_scan = max(4, first_row)
     for row in range(start_scan, last_row + 1):
         col_a = normalize_text(sheet.Cells(row, "A").Value)
-        if col_a.startswith("TOTALE"):
+        if col_a == "TOTALI":
+            continue
+        if is_script_generated_mr_totale_label(col_a):
             continue
         if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
+            continue
+        raw_d_hdr = str(sheet.Cells(row, "D").Value or "")
+        raw_f_hdr = str(sheet.Cells(row, "F").Value or "")
+        if "attributo a scelta del simbolo" in raw_d_hdr.lower() or "attributo a scelta del simbolo" in raw_f_hdr.lower():
             continue
         d_cell = str(sheet.Cells(row, "D").Value or "").strip().upper()
         if d_cell == "KW":
@@ -1151,71 +1303,124 @@ def find_first_mr_data_row(sheet) -> int:
 
 def strip_existing_mr_totals_block(sheet) -> None:
     """
-    Rimuove il blocco inserito dallo script sopra i dati M/R:
-    righe 'Totale ...', riga con 'kW' in colonna D, eventuale riga vuota sotto.
+    Rimuove la tabella totali inserita dallo script: eventuale riga gialla 'Totali', le righe
+    'Totale ...', e una riga vuota A..F subito sotto, senza toccare l'intestazione tabella dati.
+    La riga 'Totali' può non essere alla riga 4 (fogli con totale unico).
     """
     try:
         ur = sheet.UsedRange
     except Exception:
         return
-    last = min(ur.Row + ur.Rows.Count - 1, ur.Row + 200)
-    kw_row: int | None = None
-    for r in range(4, last + 1):
-        if str(sheet.Cells(r, "D").Value or "").strip().lower() == "kw":
-            kw_row = r
+    last = min(ur.Row + ur.Rows.Count - 1, ur.Row + 400)
+
+    r_tot: int | None = None
+    for rr in range(4, last + 1):
+        if normalize_text(sheet.Cells(rr, "A").Value) == "TOTALI":
+            r_tot = rr
             break
-    if kw_row is None:
-        return
-    t0: int | None = None
-    for r in range(4, kw_row + 1):
-        if normalize_text(sheet.Cells(r, "A").Value).startswith("TOTALE"):
-            t0 = r
+
+    if r_tot is not None:
+        r = r_tot
+        sheet.Rows(r).Delete()
+        last -= 1
+        while r <= last:
+            if is_script_generated_mr_totale_label(normalize_text(sheet.Cells(r, "A").Value)):
+                sheet.Rows(r).Delete()
+                last -= 1
+                continue
             break
-    if t0 is None:
+        if r <= last and _mr_strict_blank_separator_a_to_f(sheet, r):
+            sheet.Rows(r).Delete()
         return
-    sheet.Rows(f"{t0}:{kw_row}").Delete()
-    if _row_is_mr_block_blank_separator(sheet, t0):
-        sheet.Rows(f"{t0}").Delete()
+
+    r = 4
+    if r > last:
+        return
+    while r <= last:
+        if is_script_generated_mr_totale_label(normalize_text(sheet.Cells(r, "A").Value)):
+            sheet.Rows(r).Delete()
+            last -= 1
+            continue
+        break
+    if r <= last and _mr_strict_blank_separator_a_to_f(sheet, r):
+        sheet.Rows(r).Delete()
 
 
 def find_first_grand_data_row(sheet) -> int:
-    """Prima riga con contributo in D o F (fogli senza gruppi M/R)."""
-    used_range = sheet.UsedRange
-    last_row = used_range.Row + used_range.Rows.Count - 1
-    for row in range(4, last_row + 1):
-        col_a = normalize_text(sheet.Cells(row, "A").Value)
-        if col_a.startswith("TOTALE"):
-            continue
-        if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
-            continue
-        raw_d = sheet.Cells(row, "D").Value
-        raw_f = sheet.Cells(row, "F").Value
-        d_blank = raw_d is None or str(raw_d).strip() == ""
-        f_blank = raw_f is None or str(raw_f).strip() == ""
-        if d_blank and f_blank:
-            continue
-        return row
-    return max(4, used_range.Row)
-
-
-def strip_existing_grand_totale_row(sheet) -> None:
-    """Rimuove una singola riga 'Totale' inserita in precedenza (solo cella A4 esattamente Totale)."""
-    if normalize_text(sheet.Range("A4").Value) != "TOTALE":
-        return
-    sheet.Rows("4").Delete()
+    """
+    Prima riga dati motore (fogli senza split gruppi): stessa regola di find_first_mr_data_row.
+    Non usare «prima cella D/F non vuota»: l'intestazione tabella ha spesso 0.00 in D/F e verrebbe
+    scambiata per dato, spostando l'inserimento totali sulle righe titolo sopra l'intestazione vera.
+    """
+    return find_first_mr_data_row(sheet)
 
 
 def insert_grand_total_row(sheet, *, number_format: str = "0.00") -> None:
-    """Una riga 'Totale' con somma D/F sopra il primo dato (fogli senza raggruppamento M/R)."""
-    strip_existing_grand_totale_row(sheet)
+    """
+    Foglio senza split per gruppi: inserisce esattamente tre righe vuote sopra l'intestazione della
+    tabella dati (ancora allineata al primo dato M/R, non alle celle 0.00 dell'intestazione). Scrive
+    Totali (giallo), Totale con somme, riga vuota; sulla riga intestazione tabella (ricavata come per
+    i fogli multi-gruppo) imposta D/F = kW e A in grassetto. Nessuna riga target fissa (niente shift cumulativi).
+    """
+    strip_existing_mr_totals_block(sheet)
+    fd_before = find_first_grand_data_row(sheet)
     kw_g, amp_g = compute_sheet_grand_total(sheet)
-    fd = find_first_grand_data_row(sheet)
-    sheet.Rows(f"{fd}").Insert()
-    sheet.Cells(fd, "A").Value = "Totale"
-    sheet.Cells(fd, "D").Value = normalize_output_number(kw_g)
-    sheet.Cells(fd, "F").Value = normalize_output_number(amp_g)
-    sheet.Range(f"D{fd}").NumberFormat = number_format
-    sheet.Range(f"F{fd}").NumberFormat = number_format
+    shift_top = mr_insert_anchor_row_above_first_data(sheet, fd_before)
+
+    block = _GRAND_TOTAL_BLOCK_ROWS
+    sheet.Rows(f"{shift_top}:{shift_top + block - 1}").Insert()
+
+    first_data_row = find_first_grand_data_row(sheet)
+    min_header = shift_top + block
+    header_row = mr_data_header_row_above(sheet, first_data_row, min_row=min_header)
+    tr = shift_top + 1
+
+    try:
+        sheet.Rows(first_data_row).Copy()
+        sheet.Rows(tr).PasteSpecial(XL_PASTE_FORMATS)
+    except Exception:
+        pass
+
+    y = shift_top
+    sheet.Cells(y, "A").Value = "Totali"
+    sheet.Cells(y, "D").Value = "kW"
+    sheet.Cells(y, "F").Value = "A"
+    sheet.Cells(y, "B").ClearContents()
+    sheet.Cells(y, "C").ClearContents()
+    sheet.Cells(y, "E").ClearContents()
+    y_rng = sheet.Range(sheet.Cells(y, 1), sheet.Cells(y, _MR_TOTALS_LAST_COL))
+    y_rng.Interior.Pattern = 1
+    y_rng.Interior.Color = COLOR_YELLOW_EXCEL
+    y_rng.Font.Bold = True
+    clear_row_contents_right_of_col(sheet, y, from_col=_MR_TOTALS_LAST_COL + 1)
+
+    sheet.Cells(tr, "A").Value = "Totale"
+    sheet.Cells(tr, "D").Value = normalize_output_number(kw_g)
+    sheet.Cells(tr, "F").Value = normalize_output_number(amp_g)
+    sheet.Cells(tr, "D").NumberFormat = number_format
+    sheet.Cells(tr, "F").NumberFormat = number_format
+    clear_row_contents_right_of_col(sheet, tr, from_col=_MR_TOTALS_LAST_COL + 1)
+
+    clear_sheet_row_cells(sheet, shift_top + 2)
+
+    replace_dim_potenza_corrente_attr_labels(
+        sheet, header_row, header_row, only_columns_d_f=True
+    )
+    if str(sheet.Cells(header_row, "D").Value or "").strip().lower() != "kw":
+        sheet.Cells(header_row, "D").Value = "kW"
+    if str(sheet.Cells(header_row, "F").Value or "").strip().lower() != "a":
+        sheet.Cells(header_row, "F").Value = "A"
+    sheet.Cells(header_row, "D").Font.Bold = True
+    sheet.Cells(header_row, "F").Font.Bold = True
+
+    try:
+        ur = sheet.UsedRange
+        last_mr = ur.Row + ur.Rows.Count - 1
+    except Exception:
+        last_mr = first_data_row + 500
+    normalize_data_kw_amp_numeric_cells(
+        sheet, first_data_row, last_mr, number_format=number_format
+    )
 
 
 def remove_sheets_not_in_config(workbook, config_rows: list[ConfigRow], line_type_key: str) -> None:
@@ -1253,7 +1458,9 @@ def mr_data_row_totals_classification(
     include=True e matched_group_key None: contributo non assegnato ad alcun @RANGE_*.
     """
     col_a = normalize_text(sheet.Cells(row, "A").Value)
-    if col_a.startswith("TOTALE"):
+    if col_a == "TOTALI":
+        return False, None, 0.0, 0.0
+    if is_script_generated_mr_totale_label(col_a):
         return False, None, 0.0, 0.0
     if row_skips_mr_data_row(sheet.Cells(row, "A").Value, sheet.Cells(row, "B").Value):
         return False, None, 0.0, 0.0
@@ -1369,33 +1576,73 @@ def insert_totals_rows(
     sheet_name: str,
     number_format: str = "0.00",
     cous_cous_line: bool = False,
-) -> tuple[dict[str, dict[str, float]], list[UnmatchedRow]]:
+) -> tuple[dict[str, dict[str, float]], list[UnmatchedRow], int]:
     """
-    Sopra la tabella dati: righe Totale per gruppo, riga intestazione kW/A, una riga vuota, poi i dati.
-    Colonna P: gruppo assegnato a ogni riga che concorre ai totali (per ogni foglio con raggruppamento M/R).
+    Inserisce sopra la tabella dati: (1) riga gialla con Totali / kW / A in A,D,F; (2) una riga
+    per gruppo con descrizione in A e totali in D,F; (3) riga vuota A..F; (4) intestazione
+    originale della tabella (solo D/F sostituiti con kW e A); poi i dati con numeri puri in D e F.
+    Terzo valore: shift righe rispetto al layout prima dell'operazione (per log).
     """
     strip_existing_mr_totals_block(sheet)
+    fd_before = find_first_mr_data_row(sheet)
     totals, unmatched_rows = compute_totals_for_sheet(sheet, split_cfg)
     entries = group_definitions(split_cfg)
     if not entries:
         clear_mr_group_annotation_column(sheet)
-        return totals, unmatched_rows
+        return totals, unmatched_rows, 0
 
-    fd = find_first_mr_data_row(sheet)
     n = len(entries)
-    sheet.Rows(f"{fd}:{fd + n}").Insert()
+    t0 = _MR_TOTALS_BLOCK_FIRST_ROW
+    # t0 = intestazione gialla; t0+1..t0+n = totali; t0+n+1 = vuoto; t0+n+2 = intestazione dati; dati da t0+n+3
+    target_data = t0 + n + 3
 
-    first_data_row = fd + n + 1
+    # Inserire sopra il primo dato sposta solo i dati, non l'intestazione: la tabella (intestazione+dati)
+    # va spostata inserendo righe a partire dall'intestazione (salta righe vuote A..F tra intestazione e dato).
+    shift_top = mr_insert_anchor_row_above_first_data(sheet, fd_before)
+
+    if fd_before < target_data:
+        ins = target_data - fd_before
+        if ins > 0:
+            sheet.Rows(f"{shift_top}:{shift_top + ins - 1}").Insert()
+    elif fd_before > target_data:
+        dels = fd_before - target_data
+        if dels > 0:
+            sheet.Rows(f"{target_data}:{fd_before - 1}").Delete()
+
+    fd_check = find_first_mr_data_row(sheet)
+    if fd_check != target_data:
+        log(
+            f"[WARN] Layout totali: prima riga dati attesa {target_data}, trovata {fd_check}; "
+            "verificare righe sopra la tabella dati."
+        )
+
+    first_data_row = fd_check
+    min_header = t0 + n + 2
+    header_row = mr_data_header_row_above(sheet, first_data_row, min_row=min_header)
+    blank_row = t0 + n + 1
+
     try:
         sheet.Rows(first_data_row).Copy()
-        for offset in range(n + 1):
-            sheet.Rows(fd + offset).PasteSpecial(XL_PASTE_FORMATS)
+        for i in range(n):
+            sheet.Rows(t0 + 1 + i).PasteSpecial(XL_PASTE_FORMATS)
     except Exception:
         pass
 
-    hdr_row = fd + n
+    y = t0
+    sheet.Cells(y, "A").Value = "Totali"
+    sheet.Cells(y, "D").Value = "kW"
+    sheet.Cells(y, "F").Value = "A"
+    sheet.Cells(y, "B").ClearContents()
+    sheet.Cells(y, "C").ClearContents()
+    sheet.Cells(y, "E").ClearContents()
+    y_rng = sheet.Range(sheet.Cells(y, 1), sheet.Cells(y, _MR_TOTALS_LAST_COL))
+    y_rng.Interior.Pattern = 1
+    y_rng.Interior.Color = COLOR_YELLOW_EXCEL
+    y_rng.Font.Bold = True
+    clear_row_contents_right_of_col(sheet, y, from_col=_MR_TOTALS_LAST_COL + 1)
+
     for i, entry in enumerate(entries):
-        r = fd + i
+        r = t0 + 1 + i
         tw = totals.get(entry["key"], {"kw": 0.0, "amp": 0.0})
         row_label = group_display_label_for_sheet(sheet_name, entry["key"], entry["label"])
         label_a = f"Totale {row_label}"
@@ -1406,11 +1653,29 @@ def insert_totals_rows(
         sheet.Cells(r, "F").Value = normalize_output_number(tw["amp"])
         sheet.Cells(r, "D").NumberFormat = number_format
         sheet.Cells(r, "F").NumberFormat = number_format
+        clear_row_contents_right_of_col(sheet, r, from_col=_MR_TOTALS_LAST_COL + 1)
 
-    sheet.Cells(hdr_row, "D").Value = "kW"
-    sheet.Cells(hdr_row, "F").Value = "A"
+    replace_dim_potenza_corrente_attr_labels(
+        sheet, header_row, header_row, only_columns_d_f=True
+    )
+    if str(sheet.Cells(header_row, "D").Value or "").strip().lower() != "kw":
+        sheet.Cells(header_row, "D").Value = "kW"
+    if str(sheet.Cells(header_row, "F").Value or "").strip().lower() != "a":
+        sheet.Cells(header_row, "F").Value = "A"
 
-    sheet.Rows(f"{hdr_row + 1}").Insert()
+    clear_sheet_row_cells(sheet, blank_row)
+
+    try:
+        ur = sheet.UsedRange
+        last_mr = ur.Row + ur.Rows.Count - 1
+    except Exception:
+        last_mr = first_data_row + 500
+    normalize_data_kw_amp_numeric_cells(
+        sheet, first_data_row, last_mr, number_format=number_format
+    )
+
+    row_shift = find_first_mr_data_row(sheet) - fd_before
+
     annotate_mr_group_column_p(
         sheet,
         split_cfg,
@@ -1418,7 +1683,7 @@ def insert_totals_rows(
         cous_cous_line=cous_cous_line,
     )
 
-    return totals, unmatched_rows
+    return totals, unmatched_rows, row_shift
 
 
 def create_summary_file(
@@ -1704,7 +1969,7 @@ def main() -> int:
                     unmatched_rows: list[UnmatchedRow] = []
 
                     if use_groups:
-                        totals_by_group, unmatched_rows = insert_totals_rows(
+                        totals_by_group, unmatched_rows, mr_row_shift = insert_totals_rows(
                             sheet,
                             split_cfg,
                             sheet_name=cfg.sheet_name,
@@ -1786,14 +2051,12 @@ def main() -> int:
                         )
 
                     if use_groups and unmatched_rows:
-                        n_gr = len(group_definitions(split_cfg))
-                        row_shift = n_gr + 2 if n_gr else 0
                         log(
                             f"[WARN] Foglio '{cfg.sheet_name}': {len(unmatched_rows)} righe con valori non classificate "
                             "perche fuori da tutti i range configurati."
                         )
                         for item in unmatched_rows:
-                            adj_row = item.row + row_shift
+                            adj_row = item.row + mr_row_shift
                             if row_skips_mr_data_row(
                                 sheet.Cells(adj_row, "A").Value,
                                 sheet.Cells(adj_row, "B").Value,
