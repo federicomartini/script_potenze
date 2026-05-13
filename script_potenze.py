@@ -1260,13 +1260,33 @@ def create_summary_file(
                 rng = ws.Range(ws.Cells(prev["row"], 1), ws.Cells(cur["row"], 6))
                 rng.Borders(XL_INSIDE_HORIZONTAL).LineStyle = XL_NONE
 
-        # Riga totale in basso, come nel formato validato.
-        total_kw = sum(item["kw"] for item in summary_rows) + sum(item["kw"] for item in vite_rows)
-        total_amp = sum(item["amp"] for item in summary_rows) + sum(item["amp"] for item in vite_rows)
+        # Riga totale in basso: formule SUM su B/C così si aggiornano se il progettista modifica i valori sopra.
         total_row = max(24, last_written_row + 3)
         ws.Cells(total_row, 1).Value = "TOTALE"
-        ws.Cells(total_row, 2).Value = normalize_output_number(total_kw)
-        ws.Cells(total_row, 3).Value = normalize_output_number(total_amp)
+
+        # Range SUM: sempre dalla riga dove possono comparire le viti (7), fino all'ultima riga dati tabella.
+        first_sum_row = _SMISTAMENTO_VITE_START_ROW
+        last_sum_row: int | None = None
+        if written_rows:
+            last_sum_row = written_rows[-1]["row"]
+        elif vite_rows:
+            last_sum_row = vite_last_row
+        else:
+            first_sum_row = None
+
+        if (
+            first_sum_row is not None
+            and last_sum_row is not None
+            and last_sum_row >= first_sum_row
+        ):
+            ws.Cells(total_row, 2).Formula = f"=SUM(B{first_sum_row}:B{last_sum_row})"
+            ws.Cells(total_row, 3).Formula = f"=SUM(C{first_sum_row}:C{last_sum_row})"
+        else:
+            total_kw = sum(item["kw"] for item in summary_rows) + sum(item["kw"] for item in vite_rows)
+            total_amp = sum(item["amp"] for item in summary_rows) + sum(item["amp"] for item in vite_rows)
+            ws.Cells(total_row, 2).Value = normalize_output_number(total_kw)
+            ws.Cells(total_row, 3).Value = normalize_output_number(total_amp)
+
         ws.Cells(total_row, 4).Value = ""
         ws.Cells(total_row, 5).Value = ""
         ws.Cells(total_row, 6).Value = ""

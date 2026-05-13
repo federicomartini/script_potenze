@@ -33,16 +33,14 @@
 @RANGE_MOVIMENTI_LINEA=450-860
 @RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
 @OVERRIDE_SECONDARIO=Movimenti Stenditrice
+@MAP_SHEET=A
 @MAP_SHEET=B
-@MAP_SHEET=B1
-@MAP_SHEET_GROUP=B2;secondario;Sezionatore Stenditrice
-@MAP_SHEET_GROUP=C3;movimenti_linea;Sezionatore Vent. Incarto 1
-@MAP_SHEET_GROUP=C4;movimenti_linea;Sezionatore Vent. Incarto 2
-@MAP_SHEET_GROUP=C5;movimenti_linea;Sezionatore Vent. Incarto 3
-@MAP_SHEET_GROUP=C6;movimenti_linea;Sezionatore Vent. GPL 1
-@MAP_SHEET_GROUP=C7;movimenti_linea;Sezionatore Vent. GPL 2
-@MAP_SHEET_GROUP=C8;movimenti_linea;Sezionatore Vent. Umidificatore
-@MAP_SHEET_GROUP=C9;movimenti_linea;Sezionatore Vent. Raffreddatore
+@MAP_SHEET=A1
+@MAP_SHEET_GROUP=B2;movimenti_linea;Sezionatore Vent. Incarto 1
+@MAP_SHEET_GROUP=B3;movimenti_linea;Sezionatore Vent. Incarto 2
+@MAP_SHEET_GROUP=B5;movimenti_linea;Sezionatore Vent. GPL
+@MAP_SHEET_GROUP=B7;movimenti_linea;Sezionatore Vent. Umidificatore
+@MAP_SHEET_GROUP=B8;movimenti_linea;Sezionatore Vent. Raffreddatore
 
 #LINE_DISPLAY_PASTA_CORTA_2_VITI
 @SPLIT_LABEL=Tagliapasta
