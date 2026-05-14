@@ -816,9 +816,7 @@ def title_for_sheet_group(
         title = mapped
     else:
         title = summary_label_for_group(sheet_name, group_key, default_label, display_cfg)
-    # Fogli tipo B1: titoli da gruppi sono "Movimenti ..." -> nello smistamento usare "Sezionatore ...".
-    if sheet_name_suffix_numeric_equals_one(sheet_name) and title.startswith("Movimenti "):
-        title = "Sezionatore " + title[len("Movimenti ") :]
+    title = sezionatore_label_on_letter1_sheet(sheet_name, title)
     return _cous_cous_finalize_label(display_cfg, title)
 
 
@@ -971,6 +969,20 @@ def sheet_name_suffix_numeric_equals_one(sheet_name: str) -> bool:
     return bool(m and int(m.group(2)) == 1)
 
 
+def sezionatore_label_on_letter1_sheet(sheet_name: str, label: str) -> str:
+    """
+    Su fogli <Lettere>1 (es. A1, B1, AA1; esclusi A11, B2) sostituisce il prefisso «Movimenti » con «Sezionatore »
+    (stessa regola dello smistamento). Output Excel: righe «Totale …» e colonna P gruppi.
+    """
+    if not sheet_name_suffix_numeric_equals_one(sheet_name):
+        return label
+    if label.startswith("Movimenti "):
+        return "Sezionatore " + label[len("Movimenti ") :]
+    if label == "Movimenti":
+        return "Sezionatore"
+    return label
+
+
 def sheet_is_multi_group_mr_name(sheet_name: str) -> bool:
     """
     Fogli dove tutti i gruppi definiti dai range M/R vanno sempre considerati (nessun filtro su @MAP_SHEET_GROUP):
@@ -1111,13 +1123,16 @@ def group_display_label_for_sheet(sheet_name: str, group_key: str, base_label: s
     Foglio C vs CC: stesso @RANGE_MOVIMENTI_SELEZIONE_SILI, descrizioni distinte.
     """
     if group_key != "movimenti_selezione_sili":
-        return base_label
-    sn = sheet_name.strip().upper()
-    if sn == "CC":
-        return "Movimenti Scarico Sili e Confezionamento"
-    if sn == "C":
-        return "Mov. Selezione Prodotto e Carico Sili"
-    return base_label
+        out = base_label
+    else:
+        sn = sheet_name.strip().upper()
+        if sn == "CC":
+            out = "Movimenti Scarico Sili e Confezionamento"
+        elif sn == "C":
+            out = "Mov. Selezione Prodotto e Carico Sili"
+        else:
+            out = base_label
+    return sezionatore_label_on_letter1_sheet(sheet_name, out)
 
 
 def _mr_strict_blank_separator_a_to_f(sheet, row: int) -> bool:
