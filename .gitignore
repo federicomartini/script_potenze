@@ -1,0 +1,27 @@
+# Note e verifiche locali
+Da_Controllare.txt
+
+# Release e build
+release/
+release_*/
+release_*.zip
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+*.spec
+
+# File di progetto / esempi (non versionare)
+*.xlsx
+*.xls
+*.docx
+esempi_*/
+test/
+
+# Copie e sandbox di sviluppo
+_cmp/
+_fix*/
+_prog*/
+_layoutcheck/
+_test_fix/

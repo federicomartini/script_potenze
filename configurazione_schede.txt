@@ -1,6 +1,8 @@
 #LINE_TYPES
 "PASTA_LUNGA_4_VITI";"Pasta Lunga 4 Viti"
+"PASTA_LUNGA_1_VITI";"Pasta Lunga 1 Vite"
 "PASTA_LUNGA_2_VITI";"Pasta Lunga 2 Viti"
+"PASTA_CORTA_1_VITI";"Pasta Corta 1 Vite"
 "PASTA_CORTA_2_VITI";"Pasta Corta 2 Viti"
 "CTA";"CTA"
 "COUS_COUS";"Cous Cous"
@@ -26,6 +28,25 @@
 @MAP_SHEET_GROUP=C8;movimenti_linea;Sezionatore Vent. Umidificatore
 @MAP_SHEET_GROUP=C9;movimenti_linea;Sezionatore Vent. Raffreddatore
 
+#LINE_DISPLAY_PASTA_LUNGA_1_VITI
+@SPLIT_LABEL=Stenditrice
+@RANGE_PRESSA=165-350
+@RANGE_FORMATRICE=351-449
+@RANGE_RECUPERO_POLVERI=NONE
+@RANGE_MOVIMENTI_LINEA=450-860
+@RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
+@OVERRIDE_SECONDARIO=Movimenti Stenditrice
+@MAP_SHEET=A
+@MAP_SHEET=B
+@MAP_SHEET=A1
+@MAP_SHEET_GROUP=B2;movimenti_linea;Sezionatore Vent. Incarto 1
+@MAP_SHEET_GROUP=B3;movimenti_linea;Sezionatore Vent. Incarto 2
+@MAP_SHEET_GROUP=B4;movimenti_linea;Sezionatore Vent. Incarto 3
+@MAP_SHEET_GROUP=B5;movimenti_linea;Sezionatore Vent. GPL 1
+@MAP_SHEET_GROUP=B6;movimenti_linea;Sezionatore Vent. GPL 2
+@MAP_SHEET_GROUP=B7;movimenti_linea;Sezionatore Vent. Umidificatore
+@MAP_SHEET_GROUP=B8;movimenti_linea;Sezionatore Vent. Raffreddatore
+
 #LINE_DISPLAY_PASTA_LUNGA_2_VITI
 @SPLIT_LABEL=Stenditrice
 @RANGE_PRESSA=165-350
@@ -39,9 +60,35 @@
 @MAP_SHEET=A1
 @MAP_SHEET_GROUP=B2;movimenti_linea;Sezionatore Vent. Incarto 1
 @MAP_SHEET_GROUP=B3;movimenti_linea;Sezionatore Vent. Incarto 2
-@MAP_SHEET_GROUP=B5;movimenti_linea;Sezionatore Vent. GPL
+@MAP_SHEET_GROUP=B4;movimenti_linea;Sezionatore Vent. Incarto 3
+@MAP_SHEET_GROUP=B5;movimenti_linea;Sezionatore Vent. GPL 1
+@MAP_SHEET_GROUP=B6;movimenti_linea;Sezionatore Vent. GPL 2
 @MAP_SHEET_GROUP=B7;movimenti_linea;Sezionatore Vent. Umidificatore
 @MAP_SHEET_GROUP=B8;movimenti_linea;Sezionatore Vent. Raffreddatore
+
+#LINE_DISPLAY_PASTA_CORTA_1_VITI
+@SPLIT_LABEL=Tagliapasta
+@RANGE_PRESSA=165-350
+@RANGE_FORMATRICE=351-449
+@RANGE_RECUPERO_POLVERI=NONE
+@RANGE_MOVIMENTI_LINEA=450-860
+@RANGE_MOVIMENTI_SELEZIONE_SILI=NONE
+@OVERRIDE_SECONDARIO=Movimenti Tagliapasta
+@MAP_SHEET=A
+@MAP_SHEET=B
+@MAP_SHEET=A1
+@MAP_SHEET_GROUP=B2;movimenti_linea;Sezionatore Vent. Trabatto
+@MAP_SHEET_GROUP=B3;movimenti_linea;Sezionatore Vent. TCM Incarto
+@MAP_SHEET_GROUP=B5;movimenti_linea;Sezionatore Vent. TCM Essiccazione 1
+@MAP_SHEET_GROUP=B6;movimenti_linea;Sezionatore Vent. TCM Essiccazione 2
+@MAP_SHEET_GROUP=B8;movimenti_linea;Sezionatore Ventilazioni Raffreddatore
+# Per i casi con SILO INTEGRATO
+@MAP_SHEET_GROUP=B8;movimenti_linea;Sezionatore Ventilazioni Raffreddatore
+@MAP_SHEET_GROUP=C2;movimenti_linea;Sezionatore Vent. Trabatto
+@MAP_SHEET_GROUP=C3;movimenti_linea;Sezionatore Vent. TCM Incarto
+@MAP_SHEET_GROUP=C5;movimenti_linea;Sezionatore Vent. TCM Essiccazione 1
+@MAP_SHEET_GROUP=C6;movimenti_linea;Sezionatore Vent. TCM Essiccazione 2
+@MAP_SHEET_GROUP=C8;movimenti_linea;Sezionatore Ventilazioni Raffreddatore
 
 #LINE_DISPLAY_PASTA_CORTA_2_VITI
 @SPLIT_LABEL=Tagliapasta
@@ -59,6 +106,13 @@
 @MAP_SHEET_GROUP=B5;movimenti_linea;Sezionatore Vent. TCM Essiccazione 1
 @MAP_SHEET_GROUP=B6;movimenti_linea;Sezionatore Vent. TCM Essiccazione 2
 @MAP_SHEET_GROUP=B8;movimenti_linea;Sezionatore Ventilazioni Raffreddatore
+# Per i casi con SILO INTEGRATO
+@MAP_SHEET_GROUP=B8;movimenti_linea;Sezionatore Ventilazioni Raffreddatore
+@MAP_SHEET_GROUP=C2;movimenti_linea;Sezionatore Vent. Trabatto
+@MAP_SHEET_GROUP=C3;movimenti_linea;Sezionatore Vent. TCM Incarto
+@MAP_SHEET_GROUP=C5;movimenti_linea;Sezionatore Vent. TCM Essiccazione 1
+@MAP_SHEET_GROUP=C6;movimenti_linea;Sezionatore Vent. TCM Essiccazione 2
+@MAP_SHEET_GROUP=C8;movimenti_linea;Sezionatore Ventilazioni Raffreddatore
 
 #LINE_DISPLAY_CTA
 @SPLIT_LABEL=Niditrice

@@ -859,7 +859,9 @@ def read_line_type_options(config_path: Path) -> list[LineTypeOption]:
     # Fallback compatibilita: sezione non presente nel file configurazione.
     return [
         LineTypeOption("PASTA_LUNGA_4_VITI", "Pasta Lunga 4 Viti"),
+        LineTypeOption("PASTA_LUNGA_1_VITI", "Pasta Lunga 1 Vite"),
         LineTypeOption("PASTA_LUNGA_2_VITI", "Pasta Lunga 2 Viti"),
+        LineTypeOption("PASTA_CORTA_1_VITI", "Pasta Corta 1 Vite"),
         LineTypeOption("PASTA_CORTA_2_VITI", "Pasta Corta 2 Viti"),
         LineTypeOption("CTA", "CTA"),
         LineTypeOption("COUS_COUS", "Cous Cous"),
